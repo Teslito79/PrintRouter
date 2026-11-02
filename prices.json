@@ -1,0 +1,22 @@
+{
+  "_note": "PLACEHOLDER PRICES - adjust before going live. Prices are in euro, per printed page (one side) per copy, plus a per-sheet surcharge for special paper. Paper type names must match rules.json.",
+  "shop_name": "COPY CENTER",
+  "currency_symbol": "€",
+  "decimal_separator": ",",
+  "per_page": {
+    "bw":    { "A4": 0.10, "A3": 0.20, "A5": 0.10 },
+    "color": { "A4": 0.50, "A3": 1.00, "A5": 0.50 }
+  },
+  "paper_type_surcharge_per_sheet": {
+    "Middle Thick (82 to 105 g/m2)": 0.03,
+    "Thick 1(106 to 169 g/m2)": 0.05,
+    "Thick 2(170 to 220 g/m2)": 0.10,
+    "Thick 3(221 to 256 g/m2)": 0.15,
+    "Thick 4(257 to 300 g/m2)": 0.25,
+    "Cardstock": 0.25,
+    "Coated (Glossy)": 0.20,
+    "Coated (Matte)": 0.20,
+    "Labels": 0.50,
+    "Envelope": 0.30
+  }
+}

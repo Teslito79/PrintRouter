@@ -1,0 +1,75 @@
+## Project: PrintRouter, a print job router for a copy center
+
+**What it is:** A Windows desktop app (Python 3.14, Tkinter) for a production copy center PC (192.168.10.4, Windows 11, used by non-technical staff). Staff add files. The app converts each file to PDF, picks the right Ricoh copier (by a rule or by hand), sends the job with per-job driver settings, and prints a price receipt on a thermal printer.
+
+**Location:** `C:\PrintRouter`, about 2,300 lines. Start it with `PrintRouter.bat` (`pythonw app.py`).
+
+### Printers
+| Key | Queue | Real IP | Notes |
+|---|---|---|---|
+| C4510 | RICOH IM C4510 PCL 6 | 192.168.10.85 | Downstairs. Tray 1-4 + Bypass. Takes Thick 4. Fully tested. |
+| C3000 | RICOH IM C3000 PCL 6_1 | 192.168.10.70 | Upstairs, preferred for colour pictures. Tray 1-2 + Bypass, up to Thick 3. |
+| C3004 | RICOH MP C3004 PCL 6 | 192.168.10.14 | Colour documents on plain paper. Tray 1-2 + Bypass. |
+| XP-80C | 80 mm thermal receipt printer | 192.168.10.17 | Receipts only. |
+
+Port **names** in Windows are out of date. Always go by `PrinterHostAddress`. The PC runs NordVPN (NordLynx) and LAN printing works with it on.
+
+### Files
+- `app.py`: Tkinter window. Handles a batch of several files; the options apply to whichever files are selected in the list. Watches `Inbox\` every 2 s (subfolders too) and moves printed files to `Printed\<date>\`. Writes `print_log.csv`.
+- `convert.py`: turns files into PDF. Images go through Pillow (fitted to the page and rotated to match). Word, Excel and PowerPoint go through MS Office via pywin32 (password-protected files fail fast).
+- `analyze.py`: page count plus colour coverage per page, from a 36 dpi pdfium render. Used by Auto to decide document vs. pictures (threshold 15%).
+- `routing.py`: loads `rules.json` and `prices.json`. The first matching rule picks the printer.
+- `driverprint.py`: **the main print path for copiers.** It reads the driver's print capabilities, builds a PrintTicket, has Windows turn it into a per-job DEVMODE (so Ricoh's private settings like paper type and tray actually reach the printer), adds the standard fields (size, colour, duplex, copies) and draws the pages with pdfium through ctypes. Nothing is saved to printer defaults.
+- `layout.py`: paper sizes, sheet counts, pages per side (1/2/4/6/8/9/16), and A5 printed 2-up on A4 for cutting.
+- `receipt.py`: works out the price and draws the receipt as a 203 dpi image, 72 mm wide, saved as a PDF.
+- `printing.py`: sends PDFs through SumatraPDF. Now used **only for receipts**.
+- `print_test.py`: tool that prints test pages through Sumatra to check which settings each driver obeys.
+- `rules.json`: printers, exact driver names for paper types and trays, routing rules, defaults, inbox/printed folders, `confirm_above_sheets: 100`.
+- `prices.json`: euro prices per side and per paper size, B&W vs. colour, plus a per-sheet extra for special paper. **These are placeholders.**
+
+### Routing rules when Printer = Auto
+1. Thick 4 -> C4510
+2. B&W -> C4510
+3. Colour document on plain, recycled or thin paper -> C3004
+4. Colour pictures -> C3000
+5. Colour on any other paper -> C3000
+
+If nothing matches, the job goes to C4510.
+
+### Options in the window
+- **Printer:** radio buttons Auto / C4510 / C3000 / C3004. There is no Content row; document vs. pictures is detected automatically and hidden.
+- **Paper:** A4, A3, or A5 (printed 2-up on A4). No Letter, no SRA sizes.
+- **Paper type and tray:** exact driver names.
+- **Sides:** single, long edge, or short edge.
+- **Colour:** B&W, Colour, or Auto (each page). Auto switches colour page by page with ResetDC, the app makes the copies itself, and each page is priced as colour or B&W.
+- **Copies** and **pages per side** (pages per side can't be combined with A5).
+- **Receipt:** one for all, one per file, none, or "Add to counter". The counter is a running tab for one customer across several print runs, saved in `counter.json`, and printed as one receipt with "Print counter receipt".
+- The app blocks combinations the driver would silently ignore, e.g. double-sided on Thick 4, Coated, Labels or Envelope, or a tray the printer doesn't have.
+- There is no finisher, so no staple, punch or fold.
+
+### Verified on paper
+- C4510 through Sumatra: simplex, both duplex modes, colour, B&W, A4, A3, copies, Bypass tray.
+- C3004 and C3000: colour, A4, 2 copies.
+- XP-80C: receipt prints full width and auto-cuts.
+- Through the new driver path: Thick 4 + Bypass tray.
+
+### Still to do
+1. Re-test on paper through the **new driver path** (`driverprint.py`): duplex, B&W, copies (dmCopies), A3, A5 2-up, landscape pages, multi-file batches.
+2. Check Colour = Auto (each page) on paper, using the copier counters.
+3. Try "Add to counter" in the live app.
+4. Paper-test **Rotate sort** (added 2026-11-02). The drivers drop `JobOffset=Rotate`, so it is done with trays instead: the C4510 has A4 portrait in Tray 1 and A4 landscape in Tray 4. The "Rotate sort" checkbox (manual only, A4 only) sends each copy as its own job, alternating Tray 1 / Tray 4, and keeps alternating across the files in a batch (`rules.json` → `rotate_sort`). The driver accepts both trays. Check on paper that the stacks alternate and the image is upright on the Tray 4 sheets.
+5. Set real prices **last**.
+6. Package with PyInstaller (step 5). `routing.app_dir()` and `printing.py` already handle a frozen exe and `_MEIPASS`.
+
+### Rules for working on this machine
+- Never change printer drivers, ports, preferences or the default printer.
+- Don't install or uninstall anything, or change system settings, without asking first.
+- Send print jobs only through normal print queue submission.
+- Don't edit files the user didn't ask to change. Read-only checks are fine.
+- Only route jobs to queues that have been verified on paper.
+
+### Working from home
+- The code is on GitHub (private repo). At home: clone it, install Python 3.14, run `pip install -r requirements.txt`, then start with `PrintRouter.bat`.
+- The app prints only to the three Ricoh queues named in `rules.json`. Those don't exist at home, so the window opens but Print gives an error and the paper-type/tray checks are missing. Do paper tests at work.
+- Good home tasks: prices (`prices.json`), PyInstaller packaging, window and receipt changes.
+- When starting Claude Code at home, ask it to read this file first.

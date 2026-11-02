@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+Inbox/
+Printed/
+print_log.csv
+counter.json
+build/
+dist/
+
+# not part of the project
+Git-*.exe
+tools/SumatraPDF-*.zip
+test_results/

@@ -1,0 +1,75 @@
+{
+  "_help": [
+    "Routing rules for PrintRouter. Rules are checked top to bottom; the FIRST rule whose 'if' matches picks the printer.",
+    "Conditions in 'if' (all must match): color true/false, content 'document'/'pictures', duplex true/false,",
+    "paper, paper_type or tray (a value or a list of values).",
+    "paper_types and trays must be spelled exactly as the printer drivers name them; they are sent to the printer with each job.",
+    "content is only decided for color jobs: Auto mode counts a job as 'pictures' when the average color coverage",
+    "of its pages is at least picture_threshold_percent.",
+    "Files put in inbox_folder (also inside folders in it) appear in the app by themselves; once printed",
+    "they are moved to printed_folder, into a folder with the date. Both are next to the app unless a full path is given."
+  ],
+  "printers": {
+    "C4510": { "queue": "RICOH IM C4510 PCL 6",   "label": "IM C4510 (downstairs)" },
+    "C3000": { "queue": "RICOH IM C3000 PCL 6_1", "label": "IM C3000 (upstairs)" },
+    "C3004": { "queue": "RICOH MP C3004 PCL 6",   "label": "MP C3004" }
+  },
+  "receipt_printer": "XP-80C",
+  "paper_types": [
+    "Plain & Recycled",
+    "Plain 1 (60 to 74 g/m2)",
+    "Plain 2 (75 to 81 g/m2)",
+    "Recycled",
+    "Thin (52 to 59 g/m2)",
+    "Middle Thick (82 to 105 g/m2)",
+    "Thick 1(106 to 169 g/m2)",
+    "Thick 2(170 to 220 g/m2)",
+    "Thick 3(221 to 256 g/m2)",
+    "Thick 4(257 to 300 g/m2)",
+    "Cardstock",
+    "Coated (Glossy)",
+    "Coated (Matte)",
+    "Labels",
+    "Envelope",
+    "Bond",
+    "Color",
+    "Letterhead",
+    "Preprinted",
+    "Special 1",
+    "Special 2",
+    "Special 3"
+  ],
+  "trays": ["Auto Tray Select", "Tray 1", "Tray 2", "Tray 3", "Tray 4", "Bypass Tray", "Large Capacity Tray"],
+  "picture_threshold_percent": 15,
+  "a5_layout": "same_page_twice",
+  "confirm_above_sheets": 100,
+  "rotate_sort": {
+    "_help": "Ticked by hand per file (A4 only). Copies take turns between these trays (A4 portrait / A4 landscape), so each copy lies crosswise on the one before. Keeps alternating across all files in one print run.",
+    "printer": "C4510",
+    "trays": ["Tray 1", "Tray 4"]
+  },
+  "inbox_folder": "Inbox",
+  "printed_folder": "Printed",
+  "rules": [
+    { "if": { "paper_type": "Thick 4(257 to 300 g/m2)" }, "printer": "C4510", "reason": "Thick 4 paper (IM C3000 takes up to Thick 3)" },
+    { "if": { "color": false },                           "printer": "C4510", "reason": "Black & white" },
+    { "if": { "color": true, "content": "document",
+              "paper_type": ["Plain & Recycled", "Plain 1 (60 to 74 g/m2)", "Plain 2 (75 to 81 g/m2)",
+                             "Recycled", "Thin (52 to 59 g/m2)"] },
+                                                          "printer": "C3004", "reason": "Color document" },
+    { "if": { "color": true, "content": "pictures" },     "printer": "C3000", "reason": "Color pictures" },
+    { "if": { "color": true },                            "printer": "C3000", "reason": "Color on special paper" }
+  ],
+  "fallback_printer": "C4510",
+  "defaults": {
+    "color": false,
+    "duplex": false,
+    "paper": "A4",
+    "paper_type": "Plain & Recycled",
+    "tray": "Auto Tray Select",
+    "copies": 1,
+    "rotate_sort": false,
+    "content": "auto",
+    "receipt": "one_for_all"
+  }
+}
