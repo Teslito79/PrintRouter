@@ -201,7 +201,7 @@ Part states: `waiting` → `sending` → `sent` → `collected`. `step` is an in
 13. **Large orders.** `confirm_above_sheets` asks per print run today. For orders: ask once at **Start printing orders**, listing any order over the limit.
 14. **PDF page sizes.** A PDF with A3 pages ordered as A4 is scaled down to fit. The website should warn the customer; the app shows the PDF's page size next to the ordered paper.
 15. **Second screen.** Tkinter can't list monitors. Placing the window full-screen on the second monitor needs a small Windows call (`EnumDisplayMonitors` via ctypes, no install). If only one monitor is connected, it opens as a normal window.
-16. **Logging.** Order jobs go to `print_log.csv` like today, with an extra `order` column. Existing columns stay, so old logs still read.
+16. **Logging.** Order jobs go to `print_log.csv` like today; the file name column starts with the order number (no new column, so old logs keep their layout).
 17. **Verified queues only.** PrintHub uses the same three queues. Before going live, the order flow needs its own paper test (multi-document order, split across printers, A5, duplex).
 
 ---
@@ -221,6 +221,13 @@ Part states: `waiting` → `sending` → `sent` → `collected`. `step` is an in
    - `jobs.py` holds the job logic moved out of `app.py` (routing, driver checks, settings text, laying out and sending, the log). Both windows use it. Checked: the old and new code give identical jobs and settings text for 279,936 setting combinations, and the moved print code differs only in its folder argument and the lock.
    - `jobs.PDF_LOCK`: all pdfium work (converting, analysing, layout, printing) runs under one lock, because pdfium is not thread-safe. On exit, the app waits for PDF work in progress, because Python crashed (0xC0000409) when it closed during an analysis.
    - `printhub.py`: the **PrintHub** button (top right of the main window) opens the PrintHub window. It lists the orders oldest first, each document with its settings, the copier Auto picks and any problem, plus the order's note, problems and sheets per copier. It reloads by itself when order folders appear or change. **Add sample orders** copies `sample_orders/` into `orders/` (under a hidden name, then renamed). No printing yet.
-3. **Queues and step buttons**: per-printer queues, Start printing orders, Pages collected, step buttons, `status.json`, crash recovery.
+3. **Queues and step buttons** (done 2026-11-03, tested with simulated copiers only):
+   - One panel per copier: the order it is on (sending n of m / sent / NOT sent / interrupted), its button, and the orders waiting for it. A copier's queue holds the orders that have a part for it, oldest payment first; Needs-attention orders are left out.
+   - **Sending only happens on a button press.** **Start printing orders** sends the next order to every free copier and turns printing ON. While ON, **Pages collected** frees that copier and sends its next order. **Stop after current orders** turns it OFF. Orders that arrive are never sent by themselves, even while ON; press Start printing orders again.
+   - When an order starts, where each of its documents goes is fixed in `status.json`, so a change to `rules.json` can't move half an order.
+   - Parts are sent one at a time by one thread (the copiers still print at the same time). The document name in the Windows queue and in `print_log.csv` starts with the order number and document folder (e.g. `PH-1002 01 Report text.pdf`).
+   - Failed send → **Retry**. App closed mid-send → on restart the part shows "interrupted" with **Everything printed** / **Send the rest again** (sends only the documents not recorded as sent). An unreadable `status.json` makes the order Needs attention rather than printing it again.
+   - **Next steps** lists orders whose parts are all collected, with the button for the next step (**Start Spiral Process**, …, **Ready for courier / pickup**).
+   - Closing the PrintHub window only hides it; closing the app while orders are being sent asks first. `confirm_above_sheets` asks before an order part over the limit is sent.
 4. **Second screen**: read-only full-screen window, refreshed from the same state.
 5. **Website sync**: download paid orders into `orders/` safely (11), plus `printhub_options.json` (9).

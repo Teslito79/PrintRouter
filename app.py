@@ -713,6 +713,9 @@ class App:
     def on_close(self):
         if self.busy and not messagebox.askyesno("PrintRouter", "Files are still being sent. Close anyway?"):
             return
+        if (self.printhub and self.printhub.sending()
+                and not messagebox.askyesno("PrintRouter", "PrintHub orders are still being sent. Close anyway?")):
+            return
         self.root.destroy()
 
 
