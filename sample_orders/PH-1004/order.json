@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "order": "PH-1004",
+  "paid_at": "2026-11-03T10:30:00+02:00",
+  "delivery": "pickup",
+  "steps": [
+    "PRINT",
+    "LAMINATE",
+    "CUTTING"
+  ],
+  "documents": [
+    "01",
+    "02"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "file": "document.pdf",
+  "title": "Photos.pdf",
+  "pages": 2,
+  "copies": 1,
+  "color": "color",
+  "sides": "single",
+  "paper": "A4",
+  "per_side": 1,
+  "paper_type": "Coated (Glossy)"
+}

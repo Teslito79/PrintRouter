@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "file": "document.pdf",
+  "title": "Wrong page count.pdf",
+  "pages": 5,
+  "copies": 1,
+  "color": "bw",
+  "sides": "single",
+  "paper": "A4",
+  "per_side": 1,
+  "paper_type": "Plain & Recycled"
+}

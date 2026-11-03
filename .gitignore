@@ -4,6 +4,7 @@ Inbox/
 Printed/
 print_log.csv
 counter.json
+orders/
 build/
 dist/
 

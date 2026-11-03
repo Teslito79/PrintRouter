@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "file": "document.pdf",
+  "title": "A5 two per side.pdf",
+  "pages": 2,
+  "copies": 1,
+  "color": "bw",
+  "sides": "single",
+  "paper": "A5",
+  "per_side": 2,
+  "paper_type": "Plain & Recycled"
+}
