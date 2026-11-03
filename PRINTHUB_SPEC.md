@@ -217,7 +217,10 @@ Part states: `waiting` → `sending` → `sent` → `collected`. `step` is an in
    - PH-1006: no `order.json` (still downloading) → skipped
 
    Driver checks (refused combinations) need the copiers and run in stage 2, when jobs are routed.
-2. **PrintHub view**: the `jobs.py` refactor (7), the PrintHub button, the list of orders with documents, printer and problems. No printing yet.
+2. **PrintHub view** (done 2026-11-03, driver checks still to be seen at work):
+   - `jobs.py` holds the job logic moved out of `app.py` (routing, driver checks, settings text, laying out and sending, the log). Both windows use it. Checked: the old and new code give identical jobs and settings text for 279,936 setting combinations, and the moved print code differs only in its folder argument and the lock.
+   - `jobs.PDF_LOCK`: all pdfium work (converting, analysing, layout, printing) runs under one lock, because pdfium is not thread-safe. On exit, the app waits for PDF work in progress, because Python crashed (0xC0000409) when it closed during an analysis.
+   - `printhub.py`: the **PrintHub** button (top right of the main window) opens the PrintHub window. It lists the orders oldest first, each document with its settings, the copier Auto picks and any problem, plus the order's note, problems and sheets per copier. It reloads by itself when order folders appear or change. **Add sample orders** copies `sample_orders/` into `orders/` (under a hidden name, then renamed). No printing yet.
 3. **Queues and step buttons**: per-printer queues, Start printing orders, Pages collected, step buttons, `status.json`, crash recovery.
 4. **Second screen**: read-only full-screen window, refreshed from the same state.
 5. **Website sync**: download paid orders into `orders/` safely (11), plus `printhub_options.json` (9).

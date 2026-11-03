@@ -74,8 +74,9 @@ def load_orders(folder, rules):
     folder = Path(folder)
     if not folder.is_dir():
         return []
+    # Folders starting with '.' are still being copied in under a temporary name.
     orders = [load_order(sub, rules) for sub in sorted(folder.iterdir())
-              if sub.is_dir() and (sub / "order.json").is_file()]
+              if sub.is_dir() and not sub.name.startswith(".") and (sub / "order.json").is_file()]
     latest = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)  # no date: last
     orders.sort(key=lambda o: (o.paid_at or latest, o.number))
     return orders
