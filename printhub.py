@@ -10,9 +10,16 @@ button is pressed: "Start printing orders" fills every free copier, and
 an order are collected, its next step (Spiral, Cutting, ...) is started by
 hand, up to Ready for courier / pickup. Progress is kept in status.json in each
 order folder. See PRINTHUB_SPEC.md.
+
+Product items (business cards, flyers, ...) wait for the owner's layout: he opens
+the customer's file, lays out the sheet in CorelDRAW and saves print.pdf into the
+item folder, then presses Layout done and gives the number of sheets. print.pdf
+is printed as it is, at actual size. An order goes to the copiers only once all
+its product items are laid out.
 """
 import datetime
 import json
+import math
 import os
 import queue
 import shutil
@@ -25,12 +32,15 @@ from tkinter import messagebox, ttk
 import analyze
 import jobs
 import orders
+import receipt
 import routing
 
 SAMPLES_FOLDER = "sample_orders"
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting"}
 BUSY = ("sending", "sent", "failed", "interrupted")  # part states that keep a copier taken
+SIDE_NAMES = {"single": "One side", "long": "Both sides, flip on long edge",
+              "short": "Both sides, flip on short edge"}
 # (pdf, size, modified) -> (coverage, page colors), kept when the window is closed and opened again.
 _analysis = {}
 
@@ -48,7 +58,8 @@ class PrintHubView:
         self.folder.mkdir(parents=True, exist_ok=True)
         self.orders = []  # orders.Order, oldest payment first
         # Order number -> progress, as in status.json: {"step": index into the order's steps,
-        # "parts": {printer: {"documents", "state", "sent", ...}}, "history": [...]}
+        # "parts": {printer: {"documents", "state", "sent", ...}},
+        # "layout": {product item: {"sheets", "paper_type", "sides", "stamp" of print.pdf, ...}}, "history": [...]}
         self.status = {}
         self.progress = {}  # (order, printer) -> (document n, of total) while sending
         self.running = False  # Start printing orders pressed (and not stopped)
@@ -135,13 +146,17 @@ class PrintHubView:
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll.set)
         self.tree.bind("<<TreeviewSelect>>", lambda _: self.show_details())
+        self.tree.bind("<Double-1>", lambda _: self.open_first_file())
         self.empty_hint = ttk.Label(box, text="", style="Hint.TLabel")
+        # Buttons for the selected product item: open the customer's files, Layout done.
+        self.item_bar = ttk.Frame(f)
+        self.item_bar.grid(row=4, column=0, sticky="we", pady=(6, 0))
 
         # Orders whose pages are all collected, each with the button for its next step.
         self.steps_box = ttk.LabelFrame(f, text="Next steps", padding=8, style="Section.TLabelframe")
-        self.steps_box.grid(row=4, column=0, sticky="we", pady=(10, 0))
+        self.steps_box.grid(row=5, column=0, sticky="we", pady=(10, 0))
         self.details = ttk.Label(f, text="", wraplength=1100, justify="left")
-        self.details.grid(row=5, column=0, sticky="we", padx=6, pady=(10, 0))
+        self.details.grid(row=6, column=0, sticky="we", padx=6, pady=(10, 0))
         self.refresh_run_label()
 
     def is_open(self):
@@ -158,21 +173,32 @@ class PrintHubView:
     # -------------------------------------------------------------- loading
 
     def _signature(self):
-        """Order folders and when their order.json last changed."""
+        """Order folders and when their order.json last changed, plus every print.pdf (products)."""
         found = []
         try:
             for sub in self.folder.iterdir():
                 try:
                     found.append((sub.name, (sub / "order.json").stat().st_mtime_ns))
                 except OSError:
-                    pass  # no order.json yet: still downloading
+                    continue  # no order.json yet: still downloading
+                try:
+                    for item in sub.iterdir():
+                        try:
+                            st = (item / orders.PRINT_PDF).stat()
+                            found.append((f"{sub.name}/{item.name}", st.st_size, st.st_mtime_ns))
+                        except OSError:
+                            pass
+                except OSError:
+                    pass
         except OSError:
             pass
         return sorted(found)
 
     def watch(self):
-        """Reload by itself when orders arrive, change or go away (new orders never start printing by themselves)."""
-        if not self.loading and self._signature() != self.seen:
+        """Reload by itself when orders arrive, change or go away, or a print.pdf is saved
+        (new orders never start printing by themselves)."""
+        saving = any(d.print_state == "saving" for o in self.orders for d in o.documents)
+        if not self.loading and (saving or self._signature() != self.seen):
             self.reload()
         self.win.after(3000, self.watch)
 
@@ -272,10 +298,11 @@ class PrintHubView:
         """The order's progress, read from its status.json the first time it is seen."""
         st = self.status.get(order.number)
         if st is None:
-            st = {"step": 0, "parts": {}, "history": []}
+            st = {"step": 0, "parts": {}, "layout": {}, "history": []}
             try:
                 data = json.loads((order.folder / "status.json").read_text(encoding="utf-8"))
-                st.update(step=int(data["step"]), parts=dict(data["parts"]), history=list(data["history"]))
+                st.update(step=int(data["step"]), parts=dict(data["parts"]), layout=dict(data.get("layout", {})),
+                          history=list(data["history"]))
                 for part in st["parts"].values():
                     part["documents"], part["sent"] = list(part["documents"]), list(part.get("sent", []))
                     if part["state"] == "sending":
@@ -295,26 +322,50 @@ class PrintHubView:
         path = self.folder / number / "status.json"
         try:
             tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps({k: st[k] for k in ("step", "parts", "history")}, indent=1), encoding="utf-8")
+            tmp.write_text(json.dumps({k: st[k] for k in ("step", "parts", "layout", "history")}, indent=1), encoding="utf-8")
             os.replace(tmp, path)
         except OSError as e:
             messagebox.showwarning("PrintHub", f"The progress of order {number} could not be saved; it may be "
                                                f"lost if the app closes.\n\n{e}", parent=self.win)
 
-    def document_job(self, doc, printer=None):
-        """(settings, job, problem) for one document; settings and job are None if it can't be routed.
+    def layout_of(self, order, doc):
+        """The owner's Layout done for a product item, while print.pdf is still the file he confirmed."""
+        entry = self.status_of(order)["layout"].get(doc.name)
+        if entry and doc.print_state == "ok" and entry.get("stamp") == doc.print_stamp:
+            return entry
+        return None
 
-        printer: the copier this document was given when its order started, if the rules
+    def sent_already(self, order, doc):
+        return any(doc.name in part["sent"] for part in self.status_of(order)["parts"].values())
+
+    def waiting_layout(self, order):
+        """Product items of the order that aren't laid out yet (and not printed already)."""
+        return [d for d in order.documents if d.product and not d.problems
+                and not self.layout_of(order, d) and not self.sent_already(order, d)]
+
+    def document_job(self, order, doc, printer=None):
+        """(settings, job, problem) for one item; settings and job are None if it can't be routed.
+        A product item that isn't laid out yet gives (None, None, None): waiting, not a problem.
+
+        printer: the copier this item was given when its order started, if the rules
         would now pick another one (e.g. rules.json changed meanwhile)."""
         if doc.problems:
             return None, None, doc.problems[0]
-        settings = doc.settings()
+        if doc.product:
+            entry = self.layout_of(order, doc)
+            if entry is None:
+                return None, None, None
+            settings = doc.product_settings(entry["sheets"], entry["paper_type"], entry["sides"])
+        else:
+            settings = doc.settings()
         job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors)
         if job and printer and job["printer"] != printer:
             settings["printer"] = printer
             job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors)
         if job is None:
             return settings, None, "Can't print with these settings"
+        if doc.product:
+            job["actual_size"] = True  # the owner's sheet exactly as it is: no fitting, no scaling
         return settings, job, job["problem"]
 
     def problems_of(self, order):
@@ -323,7 +374,7 @@ class PrintHubView:
         if "broken" in st:
             problems.append(st["broken"])
         for doc in order.documents:
-            problem = self.document_job(doc)[2]
+            problem = self.document_job(order, doc)[2]
             if problem:
                 problems.append(f"{doc.name} ({doc.title}): {problem}")
         return problems
@@ -335,7 +386,7 @@ class PrintHubView:
             return {pid: part["documents"] for pid, part in st["parts"].items()}
         parts = {}
         for doc in order.documents:
-            job = self.document_job(doc)[1]
+            job = self.document_job(order, doc)[1]
             if job:
                 parts.setdefault(job["printer"], []).append(doc.name)
         return parts
@@ -352,7 +403,8 @@ class PrintHubView:
     def queue(self, printer):
         """Orders waiting for this copier, oldest payment first."""
         return [o for o in self.orders if self.status_of(o)["step"] == 0 and printer in self.parts_of(o)
-                and self.part_state(o, printer) == "waiting" and not self.problems_of(o)]
+                and self.part_state(o, printer) == "waiting" and not self.problems_of(o)
+                and not self.waiting_layout(o)]
 
     def busy_with(self, printer):
         """The order this copier is printing (or waiting to be collected), or None."""
@@ -405,7 +457,7 @@ class PrintHubView:
             return
         order = waiting[0]
         docs = {d.name: d for d in order.documents}
-        part_jobs = [self.document_job(docs[name], printer)[1] for name in self.parts_of(order)[printer]
+        part_jobs = [self.document_job(order, docs[name], printer)[1] for name in self.parts_of(order)[printer]
                      if name in docs]
         sheets = sum(job["sheets"] for job in part_jobs if job)
         limit = self.rules.get("confirm_above_sheets", 0)
@@ -427,7 +479,7 @@ class PrintHubView:
         for name in part["documents"]:
             if name in part["sent"]:
                 continue
-            job = self.document_job(docs[name], printer)[1] if name in docs else None
+            job = self.document_job(order, docs[name], printer)[1] if name in docs else None
             if job is None or job["problem"]:
                 part.update(state="failed", error=f"{name}: can't be printed any more")
                 self.save(order.number, f"{name} can't be printed on {printer}")
@@ -505,6 +557,9 @@ class PrintHubView:
         """The order's status column."""
         if self.problems_of(order):
             return "Needs attention"
+        waiting = self.waiting_layout(order)
+        if waiting and self.status_of(order)["step"] == 0:
+            return f"Waiting for layout ({len(waiting)})" if len(waiting) > 1 else "Waiting for layout"
         label, now = self.next_step(order)
         if now:
             return now
@@ -526,12 +581,20 @@ class PrintHubView:
             self.tree.insert("", "end", iid=oid, open=not ready, text=order.number)
             for doc in order.documents:
                 printer = next((pid for pid, names in parts.items() if doc.name in names), None)
-                settings, job, problem = self.document_job(doc, printer)
+                settings, job, problem = self.document_job(order, doc, printer)
                 label = self.printers[job["printer"]]["label"] if job else ""
+                if doc.product:
+                    text, red = self.product_state(order, doc, job, problem)
+                    shown = " · ".join(doc.job.get("options", {}).values())
+                    if job:
+                        shown = f"print.pdf {self.jobs.settings_text(settings, job)}  ({shown})"
+                    values = (doc.pages or "", shown, label, text)
+                else:
+                    red = bool(problem)
+                    values = (doc.pages or "", self.jobs.settings_text(settings, job) if settings else "",
+                              label, problem or "OK")
                 self.tree.insert(oid, "end", iid=f"{oid}/{doc.name}", text=f"{doc.name}   {doc.title}",
-                                 values=(doc.pages or "", self.jobs.settings_text(settings, job) if settings else "",
-                                         label, problem or "OK"),
-                                 tags=("error",) if problem else ())
+                                 values=values, tags=("error",) if red else ())
             attention += bad
             waiting += not bad and not ready
             when = order.paid_at.strftime("%d/%m %H:%M") if order.paid_at else "?"
@@ -603,11 +666,22 @@ class PrintHubView:
         if len(rows) > 8:
             ttk.Label(self.steps_box, text=f"and {len(rows) - 8} more", style="Hint.TLabel").pack(anchor="w")
 
-    def show_details(self):
-        """Note, problems, sheets per copier and progress of the selected order."""
+    def selected_item(self):
+        """(order, item or None) for the selected row, or (None, None)."""
         selected = self.tree.selection()
-        number = selected[0].split("/")[0].removeprefix("order:") if selected else None
+        if not selected:
+            return None, None
+        number, _, name = selected[0].removeprefix("order:").partition("/")
         order = next((o for o in self.orders if o.number == number), None)
+        if order is None:
+            return None, None
+        return order, next((d for d in order.documents if d.name == name), None)
+
+    def show_details(self):
+        """Note, problems, sheets per copier and progress of the selected order; the product item's
+        choices, files and layout."""
+        self.refresh_item_bar()
+        order, item = self.selected_item()
         if order is None:
             self.details.config(text="Click an order to see its details.")
             return
@@ -618,7 +692,7 @@ class PrintHubView:
         docs = {d.name: d for d in order.documents}
         sheets = []
         for pid, names in self.parts_of(order).items():
-            jobs_ = [self.document_job(docs[n], pid)[1] for n in names if n in docs]
+            jobs_ = [self.document_job(order, docs[n], pid)[1] for n in names if n in docs]
             if all(jobs_):
                 sheets.append(f"{self.printers[pid]['label']}: {sum(j['sheets'] for j in jobs_)}")
         if sheets:
@@ -630,4 +704,192 @@ class PrintHubView:
         history = self.status_of(order)["history"]
         if history:
             lines.append("Last: " + " · ".join(f"{h['time'][11:16]} {h['event']}" for h in history[-3:]))
+        if item is not None and item.product:
+            lines += [""] + self.product_lines(order, item)
         self.details.config(text="\n".join(lines))
+
+    # -------------------------------------------------------- product items
+
+    def product_state(self, order, doc, job, problem):
+        """(status text, shown in red) for a product item."""
+        if doc.problems:
+            return doc.problems[0], True
+        if self.sent_already(order, doc):
+            entry = self.status_of(order)["layout"].get(doc.name, {})
+            if doc.print_stamp != entry.get("stamp"):
+                return f"Sent. {orders.PRINT_PDF} changed afterwards (not printed again)", True
+            return "Sent", False
+        entry = self.layout_of(order, doc)
+        if entry:
+            if problem:
+                return f"{problem}: press Layout done to change", True
+            return f"Ready to print: {_count(entry['sheets'], 'sheet')}", False
+        if doc.print_state is None:
+            wrong = next((w for *_, w in doc.files if w), None)
+            return ("Waiting for layout" + (f" · file is {wrong}" if wrong else "")), False
+        if doc.print_state == "saving":
+            return f"{orders.PRINT_PDF} is being saved…", False
+        if doc.print_state == "bad":
+            return doc.print_problem, True
+        if doc.name in self.status_of(order)["layout"]:
+            return f"{orders.PRINT_PDF} changed: press Layout done again", True
+        return f"{orders.PRINT_PDF} found: press Layout done", False
+
+    def product_lines(self, order, doc):
+        j = doc.job
+        lines = [f"{doc.name}  {doc.title}"]
+        lines += [f"    {k}: {v}" for k, v in j.get("options", {}).items()]
+        cut = orders._size_mm(j.get("cut_mm"))
+        folded = orders._size_mm(j.get("folded_mm"))
+        if cut:
+            lines.append(f"    Cut size: {orders.mm_text(cut)}"
+                         + (f", folded {orders.mm_text(folded)}" if folded else ""))
+        if j.get("note"):
+            lines.append(f"    Customer note: {j['note']}")
+        for _, title, note, warning in doc.files:
+            lines.append(f"    File: {title}  ({note})" + (f"   WRONG SIZE: {warning}" if warning else ""))
+        if doc.print_state == "ok":
+            lines.append(f"    {orders.PRINT_PDF}: {_count(doc.pages, 'page')}, {doc.print_paper}")
+        entry = self.layout_of(order, doc)
+        if entry:
+            lines.append(f"    Layout done {entry.get('time', '')[:16]}: {_count(entry['sheets'], 'sheet')}"
+                         + (f" ({entry['per_sheet']} per sheet)" if entry.get("per_sheet") else "")
+                         + f", {receipt.short_paper_type(entry['paper_type'])}, {SIDE_NAMES[entry['sides']]}")
+        return lines
+
+    def refresh_item_bar(self):
+        for w in self.item_bar.winfo_children():
+            w.destroy()
+        order, doc = self.selected_item()
+        if doc is None or not doc.product:
+            return
+        for path, title, _, warning in doc.files:
+            ttk.Button(self.item_bar, text=f"Open {title}" + ("  (wrong size)" if warning else ""),
+                       command=lambda p=path: self.open_path(p)).pack(side="left", padx=(0, 8))
+        ttk.Button(self.item_bar, text="Open folder", command=lambda: self.open_path(doc.folder)).pack(
+            side="left", padx=(0, 8))
+        can = doc.print_state == "ok" and not doc.problems and not self.sent_already(order, doc)
+        ttk.Button(self.item_bar, text="Layout done…", style="Print.TButton" if can else "TButton",
+                   state="normal" if can else "disabled",
+                   command=lambda: self.layout_dialog(order, doc)).pack(side="left", padx=(8, 0))
+        if not can and not doc.problems and not self.sent_already(order, doc):
+            hint = (f"Save the laid-out sheet as {orders.PRINT_PDF} in the item folder." if doc.print_state is None
+                    else doc.print_problem or "")
+            ttk.Label(self.item_bar, text=hint, style="Hint.TLabel").pack(side="left", padx=(12, 0))
+
+    def open_path(self, path):
+        try:
+            os.startfile(path)
+        except OSError as e:
+            messagebox.showwarning("PrintHub", f"Could not open {path.name}.\n\n{e}", parent=self.win)
+
+    def open_first_file(self):
+        _, doc = self.selected_item()
+        if doc is not None and doc.product and doc.files:
+            self.open_path(doc.files[0][0])
+
+    def layout_dialog(self, order, doc):
+        """Layout done: how many sheets of print.pdf, on which paper, one or both sides."""
+        st = self.status_of(order)
+        before = st["layout"].get(doc.name) or {}
+        quantity = doc.job.get("quantity") if orders._whole(doc.job.get("quantity")) else None
+        dlg = tk.Toplevel(self.win)
+        dlg.title(f"Layout done: {order.number} {doc.name}")
+        dlg.transient(self.win)
+        dlg.resizable(False, False)
+        f = ttk.Frame(dlg, padding=16)
+        f.grid()
+        info = [f"{doc.title}   ·   {orders.PRINT_PDF}: {_count(doc.pages, 'page')}, {doc.print_paper}"]
+        if doc.default_sides() != "single" and doc.pages == 1:
+            info.append(f"Both sides were ordered, but {orders.PRINT_PDF} has 1 page.")
+        if doc.default_sides() == "single" and doc.pages > 1:
+            info.append(f"One side was ordered; {orders.PRINT_PDF} has {doc.pages} pages, "
+                        f"each printed on its own sheet side.")
+        info.append("Printed at actual size. The copier can't print about 4 mm at the edges: keep cut marks inside.")
+        ttk.Label(f, text="\n".join(info), justify="left", wraplength=520).grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        per_var = tk.StringVar(value=str(before.get("per_sheet") or ""))
+        sheets_var = tk.StringVar(value=str(before.get("sheets") or ""))
+        paper_var = tk.StringVar(value=before.get("paper_type") or doc.default_paper_type(self.rules) or "")
+        sides_var = tk.StringVar(value=SIDE_NAMES[before.get("sides") or doc.default_sides()])
+
+        row = 1
+        if quantity:
+            ttk.Label(f, text=f"Pieces ordered: {quantity}.  Pieces per sheet:").grid(row=row, column=0, sticky="w")
+            ttk.Entry(f, textvariable=per_var, width=8).grid(row=row, column=1, sticky="w", padx=6)
+            row += 1
+        ttk.Label(f, text=f"Sheets (copies of {orders.PRINT_PDF}):").grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Entry(f, textvariable=sheets_var, width=8).grid(row=row, column=1, sticky="w", padx=6)
+        row += 1
+        ttk.Label(f, text="Paper type:").grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Combobox(f, textvariable=paper_var, values=self.rules["paper_types"], state="readonly", width=30).grid(
+            row=row, column=1, columnspan=2, sticky="w", padx=6)
+        row += 1
+        paper_choice = doc.job.get("options", {}).get("Paper")
+        if paper_choice and not doc.default_paper_type(self.rules):
+            ttk.Label(f, text=f"“{paper_choice}” isn't in product_papers in rules.json: pick the paper type.",
+                      style="Hint.TLabel").grid(row=row, column=0, columnspan=3, sticky="w")
+            row += 1
+        ttk.Label(f, text="Sides:").grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Combobox(f, textvariable=sides_var, values=list(SIDE_NAMES.values()), state="readonly", width=30).grid(
+            row=row, column=1, columnspan=2, sticky="w", padx=6)
+        row += 1
+        check = ttk.Label(f, text="", justify="left", wraplength=520)
+        check.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        row += 1
+        buttons = ttk.Frame(f)
+        buttons.grid(row=row, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        ok = ttk.Button(buttons, text="Ready to print", style="Print.TButton")
+        ok.pack(side="left")
+        ttk.Button(buttons, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        result = {}
+
+        def on_per_sheet(*_):
+            per = per_var.get().strip()
+            if quantity and per.isdigit() and int(per) > 0:
+                sheets_var.set(str(math.ceil(quantity / int(per))))  # calls update()
+
+        def update(*_):
+            result.clear()
+            sides = next(k for k, v in SIDE_NAMES.items() if v == sides_var.get())
+            sheets = sheets_var.get().strip()
+            good = False
+            if not (sheets.isdigit() and 1 <= int(sheets) <= 999):
+                text = "Sheets: a whole number from 1 to 999."
+            elif not paper_var.get():
+                text = "Pick the paper type."
+            else:
+                settings = doc.product_settings(int(sheets), paper_var.get(), sides)
+                job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors)
+                if job is None:
+                    text = "Can't print with these settings."
+                elif job["problem"]:
+                    text = f"{self.printers[job['printer']]['label']}: {job['problem']}"
+                else:
+                    good = True
+                    text = (f"{self.printers[job['printer']]['label']} · {_count(job['sheets'], 'sheet')} of paper · "
+                            f"{self.jobs.settings_text(settings, job)}")
+                    result.update(sheets=int(sheets), paper_type=paper_var.get(), sides=sides)
+            check.config(text=text, foreground="#000000" if good else "#B00020")
+            ok.config(state="normal" if good else "disabled")
+
+        def done():
+            if not result:
+                return
+            per = per_var.get().strip()
+            st["layout"][doc.name] = {
+                "sheets": result["sheets"], "per_sheet": int(per) if per.isdigit() and quantity else None,
+                "paper_type": result["paper_type"], "sides": result["sides"], "stamp": doc.print_stamp,
+                "pages": doc.pages, "paper": doc.print_paper,
+                "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+            self.save(order.number, f"{doc.name} layout done: {_count(result['sheets'], 'sheet')}")
+            dlg.destroy()
+            self.refresh()
+
+        ok.config(command=done)
+        per_var.trace_add("write", on_per_sheet)
+        for var in (sheets_var, paper_var, sides_var):
+            var.trace_add("write", update)
+        update()
+        dlg.grab_set()
+        dlg.focus_force()

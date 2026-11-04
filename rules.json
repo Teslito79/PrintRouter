@@ -48,6 +48,17 @@
     "printer": "C4510",
     "trays": ["Tray 1", "Tray 4"]
   },
+  "product_papers": {
+    "_help": "PrintHub products: the website's Paper choice -> the driver paper type for print.pdf. EXAMPLES, to be checked by the owner. A paper not listed here is picked by hand at Layout done.",
+    "Silk 130 gsm": "Thick 1(106 to 169 g/m2)",
+    "Gloss 130 gsm": "Thick 1(106 to 169 g/m2)",
+    "Silk 170 gsm": "Thick 2(170 to 220 g/m2)",
+    "Gloss 170 gsm": "Thick 2(170 to 220 g/m2)",
+    "Silk 250 gsm": "Thick 3(221 to 256 g/m2)",
+    "Gloss 250 gsm": "Thick 3(221 to 256 g/m2)",
+    "Silk 300 gsm": "Thick 4(257 to 300 g/m2)",
+    "Smooth white 300 gsm": "Thick 4(257 to 300 g/m2)"
+  },
   "inbox_folder": "Inbox",
   "printed_folder": "Printed",
   "rules": [

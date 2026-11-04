@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "kind": "product",
+  "product": "invite",
+  "name": "Invitations",
+  "quantity": 60,
+  "options": {
+    "Occasion": "Wedding",
+    "Size": "A6",
+    "Paper": "Ivory 300 gsm",
+    "Sides": "One side"
+  },
+  "cut_mm": [
+    105,
+    148
+  ],
+  "files": [
+    "invite.png"
+  ],
+  "titles": [
+    "invitation.png"
+  ]
+}

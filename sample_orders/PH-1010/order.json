@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "order": "PH-1010",
+  "paid_at": "2026-11-04T10:20:00+02:00",
+  "delivery": "courier",
+  "steps": [
+    "PRINT",
+    "CUTTING"
+  ],
+  "documents": [
+    "01"
+  ]
+}

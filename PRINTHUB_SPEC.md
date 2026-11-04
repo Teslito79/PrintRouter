@@ -1,6 +1,6 @@
 # PrintHub for PrintRouter: specification
 
-Status: draft, 2026-11-03. No code has been changed yet.
+Status: 2026-11-04. Stages 1-3 built (tested with simulated copiers only; paper test at work pending). Stage 5a (product items, 3.4) built, tested with simulated copiers only. Stage 5b (website sync) not started.
 
 ## 1. Design (as given)
 
@@ -178,6 +178,77 @@ Keeps progress across restarts, written atomically (temp file + rename, like `co
 
 Part states: `waiting` → `sending` → `sent` → `collected`. `step` is an index into `steps`; past the end means Ready.
 
+### 3.4 Product items (decided 2026-11-04)
+
+Products (business cards, flyers, invitations, menus, ... 65 products, A3 and smaller) are laid out **by the owner by hand in CorelDRAW**. The app does no imposition. One order can mix document items (3.2) and product items. A product item is a document subfolder like any other, listed in `documents` in `order.json`, with this `job.json`:
+
+```json
+{
+  "format": 1,
+  "kind": "product",
+  "product": "bcard",
+  "name": "Business cards",
+  "quantity": 250,
+  "options": {
+    "Size": "85 x 55 mm",
+    "Paper": "Silk 300 gsm",
+    "Sides": "Both sides",
+    "Finishing": "Matt lamination"
+  },
+  "cut_mm": [85, 55],
+  "files": ["front.pdf", "back.pdf"],
+  "titles": ["Logo front final.pdf", "back.pdf"],
+  "note": "Use the blue version"
+}
+```
+
+| Field | Values | Notes |
+|---|---|---|
+| `kind` | `product` | A `job.json` without `kind` (or `document`) is a document item as in 3.2 |
+| `product` | product id from the website (`lib/products.ts`), e.g. `bcard` | |
+| `name` | text | Product name in English, shown to staff |
+| `quantity` | ≥ 1 | Pieces ordered (250 cards), not sheets |
+| `options` | object: option label → chosen choice, both as **English text** | Exactly what the customer saw. Text, not list positions, so reordering or adding choices on the website can't change old orders. Shown to staff; the app does not act on them, except `Paper` and `Sides` (below) |
+| `cut_mm` | `[width, height]` in mm, numbers > 0 | Finished cut size. For folded items the open (flat) size. For round or custom shapes the bounding box |
+| `folded_mm` | `[width, height]`, optional | Folded size, folded items only |
+| `files` | 1 to 5 file names in the same folder | Customer files as uploaded: pdf, png, jpg, jpeg, ai, eps, psd. Never modified |
+| `titles` | text, same length as `files` | The customer's original file names |
+| `note` | optional text | Customer's note for this item |
+
+Not in a product `job.json`: sheets, paper type, tray, printer, prices. The shop decides these.
+
+Steps stay in `order.json` (`steps`). The website derives them from the product and its options (e.g. a lamination choice adds `LAMINATE`, cards add `CUTTING`).
+
+#### Product papers → driver paper types
+
+The website's paper names (`Silk 300 gsm`) are not driver names. A table in `rules.json`, kept by the owner, maps them:
+
+```json
+"product_papers": {
+  "Silk 170 gsm": "Thick 2(170 to 220 g/m2)",
+  "Silk 300 gsm": "Thick 4(257 to 300 g/m2)"
+}
+```
+
+(Example values; the owner fills in the real ones.) A product whose paper isn't in the table shows **Paper not mapped**: staff pick the paper type by hand for that item, or add it to the table.
+
+#### Flow in the app
+
+1. **Waiting for layout.** The product item arrives with the customer files. The PrintHub view shows the product name, quantity, every option, `cut_mm` (and `folded_mm`), the note and the customer files with their page size in mm. A file whose size doesn't match `cut_mm` (with or without 2-3 mm bleed) is flagged, e.g. "95 x 60 mm, ordered 85 x 55 mm". The owner fixes it in CorelDRAW.
+2. **Open file** opens a customer file in its default program (PDF viewer / CorelDRAW), the same way Windows would on a double click.
+3. The owner lays out the sheet in his own CorelDRAW template (e.g. 8 cards per A4 with cut marks) and exports **`print.pdf`** into the same item folder, next to the untouched customer files.
+4. The app detects `print.pdf`. It counts it as complete only once its size has stopped changing and pdfium can open it. Checks: every page is A4 or A3 (within 1 mm, either orientation); anything else is a problem shown in red. Page count is shown.
+5. **Sheets.** He types the number of sheets, or cards per sheet and the app works it out: 250 cards, 8 per sheet → 32 sheets (rounded up). The sheet number becomes the **copies** of `print.pdf`. If `print.pdf` already holds every sheet as its own page, he enters 1.
+6. **Ready to print.** Saved in `status.json` under `layout` (sheets, time, page count of `print.pdf`). From here it is printed like a document job: actual size, no n-up, no scaling, no rasterising beyond the existing driver path.
+   - Paper size: from the pages of `print.pdf` (A4 / A3).
+   - Paper type: from `product_papers`.
+   - Sides: `Both sides` (or `Double-sided`) → `long`, otherwise `single`. Staff can change it at Layout done.
+   - Colour: `color`. Printer: Auto (routing rules in 2.3), staff can override. Tray: `Auto Tray Select`.
+7. An order enters the copier queues only when **all** its product items are Ready to print. Until then it is listed as Waiting for layout. Documents in the same order wait with it, so an order is never split in time.
+8. If `print.pdf` is replaced after Ready to print but before sending, the item goes back to step 4 (check again, sheets kept but shown for confirming). After sending, a changed `print.pdf` is ignored and flagged.
+
+Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quantity` not a whole number ≥ 1, `options` not label → text, `cut_mm` missing or larger than A3 (297 x 420 mm), a listed file missing or of a type not in the list.
+
 ---
 
 ## 4. Problems and decisions needed
@@ -230,4 +301,9 @@ Part states: `waiting` → `sending` → `sent` → `collected`. `step` is an in
    - **Next steps** lists orders whose parts are all collected, with the button for the next step (**Start Spiral Process**, …, **Ready for courier / pickup**).
    - Closing the PrintHub window only hides it; closing the app while orders are being sent asks first. `confirm_above_sheets` asks before an order part over the limit is sent.
 4. **Second screen**: read-only full-screen window, refreshed from the same state.
-5. **Website sync**: download paid orders into `orders/` safely (11), plus `printhub_options.json` (9).
+5. **Products and website sync**:
+   - a. **Product items** (3.4) (done 2026-11-04, tested with simulated copiers only), built at home on sample orders, no copiers or website needed: read and check product `job.json`, `product_papers` in `rules.json`, Waiting for layout / Ready to print, **Open file**, `print.pdf` detection and checks, sheet count, printing `print.pdf` through the existing queue code. New sample orders: business cards (8 per A4, double-sided, laminated, CUTTING), a folded flyer, a mixed order (document + product), a wrong-sized customer file and a bad product `job.json`.
+     - Built: `orders.py` reads product items (`kind: product`), checks the customer files' sizes (PDF/.ai pages; PNG/JPG with a saved resolution; .eps/.psd not checked) and `print.pdf` (A4 or A3 on every page, not changed in the last 3 seconds). `printhub.py`: Waiting for layout / print.pdf found / Ready to print / Sent per item; buttons **Open <file>**, **Open folder**, **Layout done…** (pieces per sheet → sheets, paper type from `product_papers` or picked, sides; shows the copier and any driver problem before confirming). The layout is kept in `status.json` → `layout`, with the size and time of `print.pdf`; a new `print.pdf` asks for Layout done again, and after sending it is ignored and flagged.
+     - `driverprint.print_pdf(..., actual_size=True)` draws product sheets at 100 %, centred on the sheet (the walk-in path still fits to the printable area). Needs a paper test: print a sheet with cut marks and measure.
+     - Samples PH-1007..1011. PH-1007 has `example_layout.pdf` (8 cards per A4 with cut marks): rename it to `print.pdf` to try Layout done without CorelDRAW.
+   - b. **Website sync**: download paid orders into `orders/` safely (11), plus `printhub_options.json` (9). The website provides an authenticated route (secret token) returning paid orders and signed file links. Product format 3.4 to be agreed with the Website chat first.

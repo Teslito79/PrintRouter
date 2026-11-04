@@ -1,0 +1,26 @@
+{
+  "format": 1,
+  "kind": "product",
+  "product": "trifold",
+  "name": "Tri-fold leaflets",
+  "quantity": 100,
+  "options": {
+    "Size": "A4 folded to DL",
+    "Paper": "Silk 170 gsm",
+    "Sides": "Both sides"
+  },
+  "cut_mm": [
+    297,
+    210
+  ],
+  "folded_mm": [
+    99,
+    210
+  ],
+  "files": [
+    "leaflet.pdf"
+  ],
+  "titles": [
+    "Leaflet v3.pdf"
+  ]
+}

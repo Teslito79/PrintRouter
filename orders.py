@@ -11,7 +11,11 @@ Run `py -3.14 orders.py [folder]` to list and check the orders in a folder.
 import datetime
 import json
 import sys
+import time
 from pathlib import Path
+
+import pypdfium2 as pdfium
+from PIL import Image
 
 import analyze
 import layout
@@ -25,18 +29,53 @@ SIDES = ("single", "long", "short")
 PAPERS = ("A4", "A3", "A5")
 TRAY = "Auto Tray Select"  # orders never pick a tray; the copier does from size and paper type
 
+# Product items (PRINTHUB_SPEC.md 3.4): the owner lays them out in CorelDRAW and saves print.pdf.
+PRINT_PDF = "print.pdf"
+PRODUCT_FILES = (".pdf", ".png", ".jpg", ".jpeg", ".ai", ".eps", ".psd")
+MAX_PRODUCT_FILES = 5
+MAX_CUT_MM = (297, 420)  # A3: the largest the copiers print
+SHEET_MM = {"A4": (210, 297), "A3": (297, 420)}  # print.pdf pages must be one of these
+SHEET_TOLERANCE_MM = 1.5
+BLEED_MM = (0, 7)  # a customer file may be the cut size plus up to about 3 mm bleed on each side
+SAVING_SECONDS = 3  # print.pdf changed this recently: CorelDRAW may still be writing it
+DOUBLE_SIDED = ("Both sides", "Double-sided")  # Sides choices that mean printing on both sides
+
 
 class Document:
-    """One document of an order: a subfolder with job.json and a PDF."""
+    """One item of an order: a subfolder with job.json and a PDF (a document),
+    or with the customer's files and, once laid out, print.pdf (a product)."""
 
     def __init__(self, name, folder):
         self.name = name  # subfolder name, e.g. '01'
         self.folder = folder
-        self.title = name  # the customer's file name, shown to staff
-        self.pdf = None
+        self.title = name  # the customer's file name (documents) or product and quantity, shown to staff
+        self.kind = "document"
+        self.pdf = None  # the file to print: the document, or a product's checked print.pdf
         self.pages = None  # counted in the PDF
         self.job = {}  # job.json as read
-        self.problems = []
+        self.problems = []  # make the order Needs attention
+        # Products only
+        self.files = []  # (path, customer's file name, size note or None, size warning or None)
+        self.print_stamp = None  # (size, modified) of print.pdf, to notice when it changes
+        self.print_paper = None  # A4 / A3, from the pages of print.pdf
+        self.print_state = None  # None (no print.pdf), 'saving', 'bad' or 'ok'
+        self.print_problem = None  # why print.pdf can't print (shown, but the order isn't Needs attention)
+
+    @property
+    def product(self):
+        return self.kind == "product"
+
+    def product_settings(self, sheets, paper_type, sides):
+        """print.pdf as the main window's per-file settings: as it is, `sheets` copies, in colour."""
+        return {"color": "color", "printer": "auto", "sides": sides, "paper": self.print_paper,
+                "per_side": "1", "paper_type": paper_type, "tray": TRAY, "copies": str(sheets), "rotate": "0"}
+
+    def default_paper_type(self, rules):
+        """The driver paper type for the customer's Paper choice (rules.json product_papers), or None."""
+        return rules.get("product_papers", {}).get(self.job.get("options", {}).get("Paper"))
+
+    def default_sides(self):
+        return "long" if self.job.get("options", {}).get("Sides") in DOUBLE_SIDED else "single"
 
     def settings(self):
         """The job as the main window's per-file settings (app.OPTIONS), printer chosen by the rules."""
@@ -155,6 +194,13 @@ def load_document(order_folder, name, rules):
     if job is None:
         return doc
     doc.job = job
+    kind = job.get("kind", "document")
+    if kind == "product":
+        load_product(doc)
+        return doc
+    if kind != "document":
+        p.append(f"kind {kind!r} is not allowed (document or product)")
+        return doc
     doc.title = str(job.get("title") or name)
 
     for key, allowed in (("color", COLORS), ("sides", SIDES), ("paper", PAPERS),
@@ -186,6 +232,159 @@ def load_document(order_folder, name, rules):
     return doc
 
 
+def _size_mm(value):
+    """(width, height) for a [width, height] list of two positive numbers, else None."""
+    if (isinstance(value, list) and len(value) == 2
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 for v in value)):
+        return float(value[0]), float(value[1])
+    return None
+
+
+def mm_text(size):
+    w, h = size
+    return f"{w:g} x {h:g} mm"
+
+
+def load_product(doc):
+    """Check a product item's job.json and its files; look for the owner's print.pdf."""
+    job, p = doc.job, doc.problems
+    doc.kind = "product"
+    name, quantity, options = job.get("name"), job.get("quantity"), job.get("options")
+    if not isinstance(job.get("product"), str) or not job["product"]:
+        p.append("product id is missing")
+    if not isinstance(name, str) or not name:
+        p.append("name is missing")
+        name = str(job.get("product") or "Product")
+    if not _whole(quantity) or quantity < 1:
+        p.append(f"quantity {quantity!r} must be a whole number of at least 1")
+        quantity = "?"
+    doc.title = f"{name} × {quantity}"
+    if not isinstance(options, dict) or not all(isinstance(k, str) and isinstance(v, str)
+                                                for k, v in options.items()):
+        p.append("options must be choice names and the chosen text")
+        job["options"] = {}
+    cut = _size_mm(job.get("cut_mm"))
+    if cut is None:
+        p.append(f"cut_mm {job.get('cut_mm')!r} must be [width, height] in mm")
+    elif min(cut) > MAX_CUT_MM[0] or max(cut) > MAX_CUT_MM[1]:
+        p.append(f"Cut size {mm_text(cut)} is larger than A3")
+    if "folded_mm" in job and _size_mm(job["folded_mm"]) is None:
+        p.append(f"folded_mm {job.get('folded_mm')!r} must be [width, height] in mm")
+
+    files, titles = job.get("files"), job.get("titles", job.get("files"))
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_PRODUCT_FILES:
+        p.append(f"files must list 1 to {MAX_PRODUCT_FILES} customer files")
+        files = []
+    if not isinstance(titles, list) or len(titles) != len(files):
+        titles = files
+    for file, title in zip(files, titles):
+        if not _plain_name(file) or Path(file).suffix.lower() not in PRODUCT_FILES:
+            p.append(f"file {file!r} must be one of {', '.join(PRODUCT_FILES)} in the item folder")
+            continue
+        if file.lower() == PRINT_PDF:
+            p.append(f"A customer file can't be called {PRINT_PDF}: that name is kept for the laid-out sheet")
+            continue
+        path = doc.folder / file
+        if not path.is_file():
+            p.append(f"{file} is missing")
+            continue
+        note, warning = customer_file_size(path, cut)
+        doc.files.append((path, str(title or file), note, warning))
+    check_print_pdf(doc)
+
+
+def customer_file_size(path, cut):
+    """(size text, warning or None) for a customer file compared with the ordered cut size."""
+    try:
+        sizes = file_sizes_mm(path)
+    except Exception as e:
+        return f"can't read the size ({e})", None
+    if not sizes:
+        return "size not checked", None  # e.g. .eps, .psd: open it to see
+    text = ", ".join(mm_text(s) for s in dict.fromkeys(sizes))
+    if cut is None:
+        return text, None
+    wrong = [s for s in sizes if not fits_cut(s, cut)]
+    if not wrong:
+        return text, None
+    return text, f"{mm_text(wrong[0])}, ordered {mm_text(cut)}"
+
+
+def file_sizes_mm(path):
+    """Page sizes in mm, rounded: every page of a PDF (or .ai saved with PDF content), or an image
+    that records its resolution. Empty if it can't be told."""
+    suffix = path.suffix.lower()
+    if suffix in (".pdf", ".ai"):
+        try:
+            pdf = pdfium.PdfDocument(str(path))
+        except Exception:
+            if suffix == ".ai":
+                return []  # an older .ai without PDF content
+            raise
+        try:
+            sizes = []
+            for i in range(len(pdf)):
+                w, h = pdf.get_page_size(i)
+                sizes.append((round(w * 25.4 / 72, 1), round(h * 25.4 / 72, 1)))
+            return sizes
+        finally:
+            pdf.close()
+    if suffix in (".png", ".jpg", ".jpeg"):
+        with Image.open(path) as img:
+            dpi = img.info.get("dpi")
+            if not dpi or not dpi[0] or not dpi[1] or dpi[0] < 30:
+                return []  # no real resolution saved: size unknown
+            return [(round(img.width * 25.4 / float(dpi[0]), 1), round(img.height * 25.4 / float(dpi[1]), 1))]
+    return []
+
+
+def fits_cut(size, cut):
+    """True if a page is the cut size, or the cut size plus bleed, either way round."""
+    lo, hi = BLEED_MM
+    for w, h in (size, size[::-1]):
+        if all(c + lo - 1 <= v <= c + hi + 1 for v, c in zip((w, h), cut)):
+            return True
+    return False
+
+
+def check_print_pdf(doc):
+    """Look at the owner's print.pdf: there yet, still being saved, and A4 or A3 on every page."""
+    path = doc.folder / PRINT_PDF
+    doc.pdf = doc.pages = doc.print_paper = doc.print_problem = doc.print_stamp = None
+    doc.print_state = None
+    try:
+        st = path.stat()
+    except OSError:
+        return
+    doc.print_stamp = [st.st_size, st.st_mtime_ns]
+    if time.time() - st.st_mtime < SAVING_SECONDS:
+        doc.print_state = "saving"
+        doc.print_problem = f"{PRINT_PDF} is still being saved"
+        return
+    try:
+        sizes = file_sizes_mm(path)
+    except Exception as e:
+        doc.print_state, doc.print_problem = "bad", f"Can't open {PRINT_PDF}: {e}"
+        return
+    if not sizes:
+        doc.print_state, doc.print_problem = "bad", f"{PRINT_PDF} has no pages"
+        return
+    papers = set()
+    for size in sizes:
+        paper = next((name for name, sheet in SHEET_MM.items()
+                      if any(all(abs(v - s) <= SHEET_TOLERANCE_MM for v, s in zip(size, turned))
+                             for turned in (sheet, sheet[::-1]))), None)
+        if paper is None:
+            doc.print_state = "bad"
+            doc.print_problem = f"{PRINT_PDF} has a {mm_text(size)} page: export it as A4 or A3"
+            return
+        papers.add(paper)
+    if len(papers) > 1:
+        doc.print_state, doc.print_problem = "bad", f"{PRINT_PDF} mixes A4 and A3 pages: make one file per size"
+        return
+    doc.pdf, doc.pages, doc.print_paper, doc.print_state = path, len(sizes), papers.pop(), "ok"
+
+
 def main():
     rules = routing.load_json("rules.json")
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else orders_dir(rules)
@@ -197,6 +396,13 @@ def main():
               + ("" if o.ok else "  NEEDS ATTENTION"))
         for d in o.documents:
             j = d.job
+            if d.product:
+                print(f"    {d.name}  {d.title}  " + " · ".join(f"{k}: {v}" for k, v in j.get("options", {}).items()))
+                for _, title, note, warning in d.files:
+                    print(f"        {title}  {note}" + (f"  WRONG SIZE: {warning}" if warning else ""))
+                print(f"        {PRINT_PDF}: " + (f"{d.pages} p {d.print_paper}" if d.print_state == "ok"
+                                                  else d.print_problem or "not there yet"))
+                continue
             print(f"    {d.name}  {d.title}  {d.pages or '?'} p  "
                   f"{j.get('color')} {j.get('sides')} {j.get('paper')} {j.get('paper_type')} x{j.get('copies')}")
         for problem in o.all_problems():

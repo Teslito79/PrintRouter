@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "order": "PH-1008",
+  "paid_at": "2026-11-04T09:30:00+02:00",
+  "delivery": "courier",
+  "steps": [
+    "PRINT"
+  ],
+  "documents": [
+    "01"
+  ],
+  "note": "Fold so the logo panel is on the front"
+}

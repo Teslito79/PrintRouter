@@ -82,6 +82,7 @@ DMPAPER = {"A3": 8, "A4": 9, "A5": 11}
 
 # GetDeviceCaps indexes
 HORZRES, VERTRES = 8, 10
+LOGPIXELSX, LOGPIXELSY = 88, 90
 PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY = 110, 111, 112, 113
 
 FPDF_ANNOT, FPDF_PRINTING = 0x01, 0x800
@@ -324,8 +325,11 @@ def refused_settings(printer, paper, color, duplex, media_type, tray):
 # --------------------------------------------------------------- printing
 
 def print_pdf(pdf_path, printer, devmode, doc_name, mono_devmode=None, page_color=None, copies=1,
-              duplex=False):
+              duplex=False, actual_size=False):
     """Draw every page of the PDF onto the printer, fitted to the printable area.
+
+    actual_size: draw at 100 %, centred on the sheet, never scaled (PrintHub products: the owner's
+    laid-out sheets with cut marks). What falls in the copier's unprintable edge is left off.
 
     Mixed color: pass mono_devmode and page_color (True/False per page); the
     printer is switched to black & white for the pages without color. Copies
@@ -344,7 +348,8 @@ def print_pdf(pdf_path, printer, devmode, doc_name, mono_devmode=None, page_colo
             raise DriverError(f"{printer} refused the print job")
         started = True
         caps = {k: gdi32.GetDeviceCaps(hdc, k) for k in
-                (HORZRES, VERTRES, PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY)}
+                (HORZRES, VERTRES, PHYSICALWIDTH, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY,
+                 LOGPIXELSX, LOGPIXELSY)}
         pages = list(range(len(pdf)))
         if duplex and len(pages) % 2 and copies > 1:
             pages.append(None)  # blank back, so the next copy starts on a new sheet
@@ -362,7 +367,7 @@ def print_pdf(pdf_path, printer, devmode, doc_name, mono_devmode=None, page_colo
                     if gdi32.StartPage(hdc) <= 0:
                         raise DriverError(f"{printer}: could not start a page")
                     if page is not None:
-                        _draw_page(hdc, page, caps)
+                        _draw_page(hdc, page, caps, actual_size)
                     if gdi32.EndPage(hdc) <= 0:
                         raise DriverError(f"{printer}: could not finish a page")
                 finally:
@@ -378,13 +383,21 @@ def print_pdf(pdf_path, printer, devmode, doc_name, mono_devmode=None, page_colo
         gdi32.DeleteDC(hdc)
 
 
-def _draw_page(hdc, page, caps):
+def _draw_page(hdc, page, caps, actual_size=False):
     pw, ph = page.get_size()  # points, already including the page's own rotation
     area_w, area_h = caps[HORZRES], caps[VERTRES]
     paper_portrait = caps[PHYSICALWIDTH] <= caps[PHYSICALHEIGHT]
     turn = (pw > ph) == paper_portrait and pw != ph  # landscape page on portrait paper (or the reverse)
     if turn:
         pw, ph = ph, pw
+    if actual_size:
+        # 1 point = 1/72 inch on paper. Centred on the physical sheet; the printer clips its own edge.
+        w, h = round(pw * caps[LOGPIXELSX] / 72), round(ph * caps[LOGPIXELSY] / 72)
+        x = (caps[PHYSICALWIDTH] - w) // 2 - caps[PHYSICALOFFSETX]
+        y = (caps[PHYSICALHEIGHT] - h) // 2 - caps[PHYSICALOFFSETY]
+        pdfium_c.FPDF_RenderPage(ctypes.c_void_p(hdc), page.raw, x, y, w, h, 1 if turn else 0,
+                                 FPDF_ANNOT | FPDF_PRINTING)
+        return
     scale = min(area_w / pw, area_h / ph)  # fit, up or down
     w, h = round(pw * scale), round(ph * scale)
     # Centre on the physical sheet, but stay inside the printable area.

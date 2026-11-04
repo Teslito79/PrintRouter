@@ -208,14 +208,15 @@ class Jobs:
         if not job["mixed"]:
             devmode = driverprint.build_devmode(queue_name, paper, job["color"], job["duplex"], copies,
                                                 job["paper_type"], tray, short_edge=flip == "short")
-            driverprint.print_pdf(pdf, queue_name, devmode, doc_name)
+            driverprint.print_pdf(pdf, queue_name, devmode, doc_name, actual_size=job.get("actual_size", False))
             return
         # Mixed: switch between color and black & white page by page, as printed.
         devmodes = [driverprint.build_devmode(queue_name, paper, color, job["duplex"], 1,
                                               job["paper_type"], tray, short_edge=flip == "short")
                     for color in (True, False)]
         driverprint.print_pdf(pdf, queue_name, devmodes[0], doc_name, mono_devmode=devmodes[1],
-                              page_color=analyze.color_pages(pdf), copies=copies, duplex=job["duplex"])
+                              page_color=analyze.color_pages(pdf), copies=copies, duplex=job["duplex"],
+                              actual_size=job.get("actual_size", False))
 
     def log(self, job, printer_label):
         path = routing.app_dir() / "print_log.csv"

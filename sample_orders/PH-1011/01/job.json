@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "kind": "product",
+  "product": "flyer",
+  "name": "Flyers",
+  "quantity": 0,
+  "options": {
+    "Size": "A5",
+    "Paper": "Gloss 130 gsm"
+  },
+  "files": [
+    "flyer.pdf",
+    "virus.exe"
+  ],
+  "titles": [
+    "flyer.pdf",
+    "virus.exe"
+  ]
+}

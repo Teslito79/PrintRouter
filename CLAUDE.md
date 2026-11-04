@@ -1,0 +1,54 @@
+# PrintRouter: brief for Claude Code
+
+Last updated 2026-11-04. Read this first. Details live in `PRINTHUB_SPEC.md` (PrintHub order flow) and `PROJECT_SUMMARY.txt` (printers, files, routing; written before PrintHub, otherwise still accurate).
+
+## Owner and how to work with him
+
+Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Learns hands-on, not a programmer.
+- Direct, short, no fluff, English. Give ONE best option with the reason.
+- Every time you ask for permission (install, commit, push, run something that changes things), add one or two plain sentences on what it does, written for someone who doesn't code.
+- Never ask him to paste passwords, keys or tokens into chat.
+- Commit and push only when he asks.
+
+## Computers
+
+- **Home PC:** `C:\PrintHub\PrintRouter` (this repo) next to `C:\PrintHub\Website` (the shop website, a separate repo and a separate Claude chat). No copiers here: Print gives an error and driver checks are missing. Good for code, window and logic work.
+- **Work PC** (192.168.10.4, Windows 11, non-technical staff): `C:\PrintRouter` only, no website. Paper tests happen here.
+- Sync: GitHub `Teslito79/PrintRouter` (private). `Upload changes.bat` (add, commit, push) and `Download changes.bat` (pull). `PrintRouter.bat` runs `git pull --ff-only` before starting, so the work PC updates itself on launch. `orders/` is gitignored.
+
+## What it is
+
+Windows desktop app, Python 3.14 + Tkinter, about 3,500 lines. Staff add files (or they arrive in `Inbox\`); the app converts to PDF, picks a Ricoh copier by rules (or by hand), sends with per-job driver settings through `driverprint.py` (PrintTicket to DEVMODE, pdfium drawing via ctypes, nothing saved to printer defaults) and prints a price receipt on the XP-80C thermal printer.
+
+Copiers: C4510 (downstairs, Tray 1-4 + Bypass, Thick 4), C3000 (colour pictures, up to Thick 3), C3004 (colour documents). **All print A3 at most, no SRA3.** Routing rules, paper types and trays: `rules.json`. Placeholder prices: `prices.json`.
+
+Safety rules (always):
+- Never change printer drivers, ports, preferences or the default printer.
+- Don't install or uninstall anything, or change system settings, without asking first.
+- Send print jobs only through normal print queue submission. Only route to queues verified on paper.
+- Don't edit files he didn't ask to change. Read-only checks are fine.
+- pdfium is not thread-safe: all PDF work runs under `jobs.PDF_LOCK`; on exit the app waits for it (closing mid-analysis crashed Python 0xC0000409).
+
+## PrintHub (orders from the website)
+
+Plan and file formats: `PRINTHUB_SPEC.md`. Stages:
+1. Order format and sample orders: **done** (`orders.py`, `sample_orders/` PH-1001..1006).
+2. PrintHub view: **done** (`printhub.py`, job logic shared in `jobs.py`).
+3. Copier queues, sending, Pages collected, next-step buttons: **done**, tested with simulated copiers only (commit ba30e49).
+4. Second screen (read-only, full screen on the printer monitor): not started.
+5. a. Product items (CorelDRAW layout, `print.pdf`, Layout done, actual-size printing): **done**, tested with simulated copiers only. Samples PH-1007..1011. b. Website sync: not started. See below and `PRINTHUB_SPEC.md` 3.4 / stage 5.
+
+**Pending first:** the paper test of stages 1-3 at work, using `WORK_TEST_CHECKLIST.txt` (not committed; the owner has a copy). Wait for his results before stage 4. Paper test of product printing at actual size (print `sample_orders/PH-1007/01/example_layout.pdf` and measure); check the example `product_papers` in `rules.json`. Open for the website: papers over 300 g/m2 (350 gsm, kraft 400 gsm) can't go through the copiers; no FOLDING step yet. Also still open from before PrintHub: paper tests of the driver path (duplex, B&W, copies, A3, A5 2-up, landscape, batches), Colour = Auto, Add to counter, Rotate sort; real prices last; PyInstaller packaging.
+
+### Decisions for stage 5 (2026-11-04)
+
+- **Documents** (the website's document calculator) keep the existing `job.json` and print automatically after the staff press Start printing orders, as built in stage 3.
+- **Products** (business cards, flyers, invitations, menus, ... 65 products on the website, A3 and smaller) are laid out **by the owner by hand in CorelDRAW**, using his own templates (e.g. 8 business cards per A4 with cut marks). The app does no imposition. Flow to build:
+  - A product order arrives with the customer's file(s) and shows as **Waiting for layout**.
+  - **Open file** button opens the customer file (default PDF program / CorelDRAW).
+  - He exports the laid-out sheet as `print.pdf` into the same order (document) folder; the customer original stays untouched beside it.
+  - The app detects `print.pdf` and moves the order to **Ready to print**; it prints `print.pdf` exactly as is (actual size, no n-up, no scaling).
+  - Sheet count: typed by him, or worked out from cards per sheet (250 cards, 8 per sheet = 32 sheets).
+- Quality: never rasterise a customer PDF on the way to the printer beyond what the existing driver path does; place and print it as is.
+- Wrong-sized files (e.g. 95 x 60 mm for an 85 x 55 card) are fixed by him in CorelDRAW during layout; the website should also warn customers at upload (website's job).
+- The website side still has to provide the paid orders: an authenticated way for this app to fetch them (e.g. an API route with a secret, returning paid orders and signed file links), download into a temp folder and rename into `orders/` with `order.json` written last (spec item 11). The product part of `job.json` is proposed in `PRINTHUB_SPEC.md` 3.4 and still has to be agreed with the Website chat; keep the formats in `PRINTHUB_SPEC.md` and the website's CLAUDE.md in step.
