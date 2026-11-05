@@ -17,6 +17,15 @@ Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Lea
 - **ADMIN folder (owner, 2026-11-05):** on both PCs the whole repo (with `.git`, the order folders, Inbox, logs) lives in `ADMIN\`; the top folder holds only `PrintRouter.lnk`, a shortcut to `ADMIN\PrintRouter.bat`. Made by `Move into ADMIN folder.bat` (+ `tools\move_into_admin.ps1`), which also repoints old desktop / Start menu shortcuts. Nothing in the code or the .bat files uses a fixed path (`routing.app_dir()`, `%~dp0`). Open Claude chats for PrintRouter in the ADMIN folder, so this file is read.
 - Sync: GitHub `Teslito79/PrintRouter` (private). `Upload changes.bat` (add, commit, push) and `Download changes.bat` (pull). `PrintRouter.bat` runs `git pull --ff-only` before starting, so the work PC updates itself on launch. `Pending Orders/`, `Orders/` and `Finished Orders/` are gitignored.
 
+## Handoffs from the planning window
+
+Changes for PrintRouter arrive as written handoff files from a separate planning window (`C:\PrintHub\Planning`), one `.md` per change, named `YYYY-MM-DD_NN_short-name.md`. They live in `C:\PrintHub\handoffs\app\` (from this repo: `..\..\handoffs\app\`), on the home PC only and outside this repo: never commit them or copy them into it.
+- On the home PC, at the start of a session, list `..\..\handoffs\app\` (not `done\`) and tell Tesla which handoffs are waiting, oldest first. On the work PC there are none; skip this.
+- Implement a handoff only when Tesla says to start it. Follow its Requirements and Out of scope exactly; if something in it is unclear or conflicts with this CLAUDE.md, PRINTHUB_SPEC.md or the code, ask Tesla instead of guessing.
+- Before marking a handoff done, check every item in its "Acceptance criteria".
+- When done, move the file to `..\..\handoffs\app\done\` and tell Tesla in one line, so he can tell the planning window.
+- `C:\PrintHub\PROJECT_LOG.md` lists decisions already made; read it when a handoff refers to it. Don't edit it.
+
 ## What it is
 
 Windows desktop app, Python 3.14 + Tkinter, about 3,500 lines. Staff add files (or they arrive in `Inbox\`); the app converts to PDF, picks a Ricoh copier by rules (or by hand), sends with per-job driver settings through `driverprint.py` (PrintTicket to DEVMODE, pdfium drawing via ctypes, nothing saved to printer defaults) and prints a price receipt on the XP-80C thermal printer.
