@@ -49,7 +49,7 @@
     "trays": ["Tray 1", "Tray 4"]
   },
   "product_papers": {
-    "_help": "PrintHub products: the website's Paper choice -> the driver paper type for print.pdf. Owner's rule (2026-11-05): 80 gsm is plain paper; every other paper is Thick 3 up to 256 gsm and Thick 4 from 257 to 300 gsm (Thick 4 always prints on the C4510). Not listed, so picked by hand at Layout done: Smooth white 350 and Kraft 400 (too heavy for the copiers), sticker papers, label sheets, envelopes and board.",
+    "_help": "PrintHub products: the website's Paper choice -> the driver paper type for print.pdf. Owner's rule (2026-11-05): 80 gsm is plain paper; every other paper is Thick 3 up to 256 gsm and Thick 4 from 257 to 300 gsm (Thick 4 always prints on the C4510). Smooth white 350 and Kraft 400 print on the IM C4510 as Thick 4 from the bypass tray (Tesla, 2026-11-05; see hand_fed_papers). Not listed, so picked by hand at Layout done: sticker papers, label sheets, envelopes and board.",
     "Smooth white 80 gsm": "Plain & Recycled",
     "Coloured 80 gsm": "Plain & Recycled",
     "Smooth white 90 gsm": "Thick 3(221 to 256 g/m2)",
@@ -75,7 +75,13 @@
     "Silk 300 gsm": "Thick 4(257 to 300 g/m2)",
     "Gloss 300 gsm": "Thick 4(257 to 300 g/m2)",
     "Smooth white 300 gsm": "Thick 4(257 to 300 g/m2)",
-    "Ivory 300 gsm": "Thick 4(257 to 300 g/m2)"
+    "Ivory 300 gsm": "Thick 4(257 to 300 g/m2)",
+    "Smooth white 350 gsm": "Thick 4(257 to 300 g/m2)",
+    "Kraft 400 gsm": "Thick 4(257 to 300 g/m2)"
+  },
+  "hand_fed_papers": {
+    "_help": "Website papers loaded by hand in the Bypass Tray. Their product items are sent to the Bypass Tray, and both sides are printed by turning the stack over by hand.",
+    "papers": ["Smooth white 350 gsm", "Kraft 400 gsm"]
   },
   "pending_folder": "Pending Orders",
   "orders_folder": "Orders",

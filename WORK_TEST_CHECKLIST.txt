@@ -75,3 +75,28 @@ STEP 5 - Write down the results
   For each copier: did the right pages come out, on the right paper, single or
   double-sided as expected? Any red rows, error messages or "NOT sent"?
   Give the results to Claude, then continue with stage 4 (the second screen).
+
+
+HAND-FED THICK PAPER TEST (350 gsm, turned by hand) - added 2026-11-05
+  Needs: a few A4 sheets of Smooth white 350 gsm, PrintRouter updated.
+  1. Load the 350 gsm sheets in the Bypass Tray of the IM C4510 (downstairs).
+  2. PrintHub: press "Add sample orders". PH-1015 (Business cards x 250, Smooth
+     white 350 gsm, both sides) appears in Pending Orders.
+  3. Open its folder (click PH-1015, "Open folder") and rename
+     example_layout.pdf to PH-1015.pdf (as if exported from CorelDRAW).
+  4. Press "Layout done...". Check: Paper type is Thick 4, Sides is
+     "Both sides, turned by hand". Type 4 in Sheets, press "Ready to print".
+     The order moves to Orders.
+  5. Press "Start printing orders". Only the FRONTS come out (4 sheets).
+     The C4510 panel says: turn the stack over, put it back in the Bypass Tray,
+     then press Print backs.
+  6. Turn the stack over, put it back in the Bypass Tray, press "Print backs".
+  7. Check:
+     - it printed on the C4510, from the Bypass Tray, both times;
+     - fronts and backs line up (the cards sit on top of each other);
+     - the arrows on the front and the back point the SAME way (to the same
+       edge of the sheet).
+     If the backs come out upside down, write down how you turned the stack
+     (flipped left-right or top-bottom). Don't change anything: the fix is
+     decided with Claude afterwards.
+  8. Press "Pages collected", then delete the PH-1015 folder from Orders.

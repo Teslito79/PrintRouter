@@ -249,7 +249,16 @@ The website's paper names (`Silk 300 gsm`) are not driver names. A table in `rul
 }
 ```
 
-(Example values; the owner fills in the real ones.) A product whose paper isn't in the table shows **Paper not mapped**: staff pick the paper type by hand for that item, or add it to the table.
+Owner's rule (2026-11-05): 80 gsm is Plain & Recycled; every other paper is Thick 3 up to 256 gsm and Thick 4 from 257 gsm. Smooth white 350 gsm and Kraft 400 gsm also print as Thick 4, on the IM C4510 from the Bypass Tray (tested by Tesla, 2026-11-05). A product whose paper isn't in the table (stickers, labels, envelopes, board) shows **Paper not mapped**: staff pick the paper type by hand for that item, or add it to the table.
+
+#### Hand-fed papers and "Both sides, turned by hand" (handoff 03, 2026-11-05)
+
+`rules.json` → `hand_fed_papers` → `papers` lists website papers loaded by hand in the Bypass Tray (`Smooth white 350 gsm`, `Kraft 400 gsm`). For a product item on one of them:
+- It is sent with tray `Bypass Tray` instead of `Auto Tray Select` (every other item keeps `Auto Tray Select`).
+- The copier can't print both sides on Thick 4, so Layout done has a fourth Sides choice, **Both sides, turned by hand** (`status.json` → `layout` → `sides`: `"hand"`). It is the default when the customer ordered Both sides on a hand-fed paper. It needs the laid-out PDF with exactly 2 pages (page 1 front sheet, page 2 back sheet); otherwise Ready to print stays disabled with "Turned by hand needs PH-xxxx.pdf with 2 pages: page 1 the front, page 2 the back." For the driver check and routing it counts as one-sided; the paper used is the sheet count.
+- Sending: the other documents of that copier part go first, then **page 1 × sheets** as its own job (`… fronts`, split above 999 copies as usual). The part then waits in state `turn`: the copier panel says "PH-xxxx 01: fronts sent. When they're out, turn the stack over, put it back in the Bypass Tray, then press Print backs." with one button, **Print backs**; the copier takes no other order and Pages collected doesn't show. **Print backs** sends **page 2 × sheets** (`… backs`); then the part goes on as normal (`sent`, Pages collected). Several hand-turned items in one part are done one after another.
+- `status.json` keeps `fronts` (items whose fronts are out), `turn` (the item waiting for its backs) and `batch` (what the current send holds), and history records "fronts sent" / "backs sent". After a restart in `turn`, Print backs shows again and the fronts are never resent. A failed fronts or backs send shows NOT sent / Retry, and Retry resends only the step that failed. After a crash mid-send, "Everything printed" marks exactly that send as printed.
+- The backs are drawn exactly as page 2 is, with no rotation. Whether they need turning is checked in the paper test (`WORK_TEST_CHECKLIST.txt`, sample PH-1015); any fix is decided with Tesla then.
 
 #### Flow in the app
 
@@ -261,8 +270,8 @@ The website's paper names (`Silk 300 gsm`) are not driver names. A table in `rul
 6. **Ready to print.** Saved in `status.json` under `layout` (sheets, time, page count of `print.pdf`). From here it is printed like a document job: actual size, no n-up, no scaling, no rasterising beyond the existing driver path.
    - Paper size: from the pages of `print.pdf` (A4 / A3).
    - Paper type: from `product_papers`.
-   - Sides: `Both sides` (or `Double-sided`) → `long`, otherwise `single`. Staff can change it at Layout done.
-   - Colour: `color`. Printer: Auto (routing rules in 2.3), staff can override. Tray: `Auto Tray Select`.
+   - Sides: `Both sides` (or `Double-sided`) → `long` (`hand` on a hand-fed paper, see above), otherwise `single`. Staff can change it at Layout done.
+   - Colour: `color`. Printer: Auto (routing rules in 2.3), staff can override. Tray: `Auto Tray Select` (`Bypass Tray` for hand-fed papers).
 7. An order enters the copier queues only when **all** its product items are Ready to print: then its folder moves from Pending Orders to Orders. Until then it is listed as Waiting for layout. Documents in the same order wait with it, so an order is never split in time.
 8. If `print.pdf` is replaced after Ready to print but before sending, the item goes back to step 4 (check again, sheets kept but shown for confirming). After sending, a changed `print.pdf` is ignored and flagged.
 

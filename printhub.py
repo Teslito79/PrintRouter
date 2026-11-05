@@ -33,6 +33,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+import pypdfium2 as pdfium
+
 import analyze
 import jobs
 import orders
@@ -42,10 +44,11 @@ import routing
 SAMPLES_FOLDER = "sample_orders"
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting"}
-BUSY = ("sending", "sent", "failed", "interrupted")  # part states that keep a copier taken
+# Part states that keep a copier taken. 'turn': fronts of a hand-turned item are out, waiting for Print backs.
+BUSY = ("sending", "turn", "sent", "failed", "interrupted")
 PRODUCT_MAX_SHEETS = 9999  # products: more than 999 are sent as several jobs (jobs.MAX_COPIES each)
 SIDE_NAMES = {"single": "One side", "long": "Both sides, flip on long edge",
-              "short": "Both sides, flip on short edge"}
+              "short": "Both sides, flip on short edge", orders.HAND: "Both sides, turned by hand"}
 # (pdf, size, modified) -> (coverage, page colors), kept when the window is closed and opened again.
 _analysis = {}
 
@@ -77,6 +80,27 @@ def options_text(order, doc):
     if doc.problems:
         lines += ["", "Problems:"] + [f"  {p}" for p in doc.problems]
     return "\n".join(lines) + "\n"  # written in text mode: Windows line ends are added then
+
+
+def hand_job(job):
+    """A hand-turned item: fronts and backs are each one page x the sheets, so the paper used is the sheets."""
+    job["hand"] = True
+    job["sheets"] = job["print_copies"]
+    job["pages"] = 1  # each of the two jobs holds one page
+
+
+def one_page(pdf, index, out):
+    """A copy of one page of the PDF (the fronts or the backs of a hand-turned item)."""
+    with jobs.PDF_LOCK:
+        src = pdfium.PdfDocument(str(pdf))
+        dest = pdfium.PdfDocument.new()
+        try:
+            dest.import_pages(src, [index])
+            dest.save(str(out))
+        finally:
+            dest.close()
+            src.close()
+    return out
 
 
 def prepare_item(order, doc, templates):
@@ -351,10 +375,17 @@ class PrintHubView:
         elif kind == "doc_sent":
             part["sent"].append(msg[3])
             self.save(number, f"{msg[3]} sent to {printer}")
+        elif kind == "step_sent":  # fronts or backs of a hand-turned item
+            name, step = msg[3], msg[4]
+            if step == "fronts":
+                part.setdefault("fronts", []).append(name)
+            else:
+                part["sent"].append(name)
+                part.pop("turn", None)
+            self.save(number, f"{name} {step} sent to {printer}")
         elif kind == "part_sent":
-            part["state"] = "sent"
             self.progress.pop((number, printer), None)
-            self.save(number, f"all sent to {printer}")
+            self.batch_done(number, printer)
         elif kind == "failed":
             part.update(state="failed", error=msg[3])
             self.progress.pop((number, printer), None)
@@ -444,7 +475,7 @@ class PrintHubView:
             entry = self.layout_of(order, doc)
             if entry is None:
                 return None, None, None
-            settings = doc.product_settings(entry["sheets"], entry["paper_type"], entry["sides"])
+            settings = doc.product_settings(entry["sheets"], entry["paper_type"], entry["sides"], self.rules)
         else:
             settings = doc.settings()
         limit = PRODUCT_MAX_SHEETS if doc.product else jobs.MAX_COPIES
@@ -456,7 +487,19 @@ class PrintHubView:
             return settings, None, "Can't print with these settings"
         if doc.product:
             job["actual_size"] = True  # the owner's sheet exactly as it is: no fitting, no scaling
+            if entry["sides"] == orders.HAND:
+                hand_job(job)
         return settings, job, job["problem"]
+
+    def settings_text(self, settings, job):
+        """As the main window shows settings; a hand-turned item says so instead of Single."""
+        text = self.jobs.settings_text(settings, job)
+        return text.replace(" · Single · ", " · Both sides by hand · ", 1) if job and job.get("hand") else text
+
+    def is_hand(self, order, doc):
+        """A product item laid out as Both sides, turned by hand: fronts and backs are sent apart."""
+        entry = self.layout_of(order, doc) if doc.product else None
+        return bool(entry) and entry["sides"] == orders.HAND
 
     def problems_of(self, order):
         problems = list(order.problems)
@@ -582,7 +625,7 @@ class PrintHubView:
                            for pid, names in self.parts_of(order).items()}
         part = st["parts"][printer]
         docs = {d.name: d for d in order.documents}
-        tasks = []
+        tasks, hand = [], None
         for name in part["documents"]:
             if name in part["sent"]:
                 continue
@@ -591,28 +634,84 @@ class PrintHubView:
                 part.update(state="failed", error=f"{name}: can't be printed any more")
                 self.save(order.number, f"{name} can't be printed on {printer}")
                 return
+            if self.is_hand(order, docs[name]):
+                # Fronts after the other documents, one hand-turned item at a time; its backs wait
+                # for Print backs (and are never part of this).
+                if hand is None and name not in part.get("fronts", []):
+                    hand = (name, job)
+                continue
             # The order number in the name shows in the copier's queue and in print_log.csv.
             job["file_name"] = f"{order.number} {name} {docs[name].title}"
-            tasks.append((name, job, docs[name].pdf, WORK_DIR / order.number / name))
-        part.update(state="sending", error=None)
+            tasks.append((name, job, docs[name].pdf, WORK_DIR / order.number / name, None))
+        if hand:
+            name, job = hand
+            job["file_name"] = f"{order.number} {name} {docs[name].title} fronts"
+            tasks.append((name, job, docs[name].pdf, WORK_DIR / order.number / name, "fronts"))
+        if not tasks:  # only backs are left: they wait for Print backs
+            self.batch_done(order.number, printer)
+            return
+        self.start_batch(order, printer, tasks, f"sending to {printer}")
+
+    def start_batch(self, order, printer, tasks, event):
+        part = self.status_of(order)["parts"][printer]
+        # What this send holds, so "Everything printed" after a crash knows what came out.
+        part.update(state="sending", error=None, batch=[[name, step] for name, _, _, _, step in tasks])
         self.progress[(order.number, printer)] = (0, len(tasks))
-        self.save(order.number, f"sending to {printer}")
+        self.save(order.number, event)
         self.to_send.put((order.number, printer, tasks))
+
+    def send_backs(self, printer):
+        """Print backs: the stack of fronts was turned over and put back; send page 2."""
+        order = self.busy_with(printer)
+        if order is None:
+            return
+        part = self.status_of(order)["parts"][printer]
+        name = part.get("turn")
+        doc = next((d for d in order.documents if d.name == name), None)
+        job = self.document_job(order, doc, printer)[1] if doc else None
+        if job is None or job["problem"]:
+            part.update(state="failed", error=f"{name}: can't be printed any more")
+            self.save(order.number, f"{name} backs can't be printed on {printer}")
+            self.refresh()
+            return
+        job["file_name"] = f"{order.number} {name} {doc.title} backs"
+        self.start_batch(order, printer, [(name, job, doc.pdf, WORK_DIR / order.number / name, "backs")],
+                         f"{name} sending backs to {printer}")
+        self.refresh()
+
+    def batch_done(self, number, printer):
+        """A send finished: wait for Print backs, send the next hand-turned item's fronts, or all sent."""
+        order = next((o for o in self.orders if o.number == number), None)
+        part = self.status[number]["parts"][printer]
+        part.pop("batch", None)
+        waiting = [n for n in part["documents"] if n in part.get("fronts", []) and n not in part["sent"]]
+        if waiting:
+            part.update(state="turn", turn=waiting[0])
+            self.save(number, f"{waiting[0]} fronts out on {printer}: turn the stack over, then Print backs")
+        elif order is not None and any(n not in part["sent"] for n in part["documents"]):
+            self.send_part(order, printer)  # another hand-turned item's fronts
+        else:
+            part["state"] = "sent"
+            self.save(number, f"all sent to {printer}")
 
     def _send_worker(self):
         """Send the parts one after another; the copiers then print them at the same time."""
         while True:
             number, printer, tasks = self.to_send.get()
-            for n, (name, job, pdf, work_dir) in enumerate(tasks, start=1):
+            for n, (name, job, pdf, work_dir, step) in enumerate(tasks, start=1):
                 self.results.put(("progress", number, printer, (n, len(tasks))))
                 try:
                     work_dir.mkdir(parents=True, exist_ok=True)
+                    if step:  # fronts = page 1 only, backs = page 2 only, each as its own job
+                        pdf = one_page(pdf, 0 if step == "fronts" else 1, work_dir / f"{step}.pdf")
                     self.jobs.print_one(work_dir, job, pdf, pdf, job["paper"], None)
                 except Exception as e:
-                    self.results.put(("failed", number, printer, f"{name}: {e}"))
+                    what = f"{name} {step}" if step else name
+                    self.results.put(("failed", number, printer, f"{what}: {e}"))
                     break
                 self.jobs.log(job, self.printers[printer]["label"])
-                self.results.put(("doc_sent", number, printer, name))
+                self.results.put(("step_sent", number, printer, name, step) if step
+                                 else ("doc_sent", number, printer, name))
             else:
                 self.results.put(("part_sent", number, printer))
 
@@ -627,19 +726,33 @@ class PrintHubView:
         self.refresh()
 
     def retry(self, printer):
+        """Send again only what didn't go: the backs if they failed, otherwise what isn't sent yet."""
         order = self.busy_with(printer)
         if order:
-            self.send_part(order, printer)
+            part = self.status_of(order)["parts"][printer]
+            if part.get("turn") and part["turn"] not in part["sent"]:
+                self.send_backs(printer)
+            else:
+                self.send_part(order, printer)
             self.refresh()
 
     def it_printed(self, printer):
-        """After the app closed mid-send: staff checked and everything came out."""
+        """After the app closed mid-send: staff checked and everything in that send came out."""
         order = self.busy_with(printer)
         if order is None:
             return
         part = self.status_of(order)["parts"][printer]
-        part.update(state="sent", sent=list(part["documents"]))
-        self.save(order.number, f"checked by hand: all printed on {printer}")
+        batch = part.get("batch") or [[n, None] for n in part["documents"] if n not in part["sent"]]
+        for name, step in batch:
+            if step == "fronts":
+                if name not in part.setdefault("fronts", []):
+                    part["fronts"].append(name)
+            elif name not in part["sent"]:
+                part["sent"].append(name)
+                if step == "backs":
+                    part.pop("turn", None)
+        self.save(order.number, f"checked by hand: printed on {printer}")
+        self.batch_done(order.number, printer)
         self.refresh()
 
     def do_next_step(self, number):
@@ -747,7 +860,7 @@ class PrintHubView:
                     text, red = self.product_state(order, doc, job, problem)
                     shown = " · ".join(doc.job.get("options", {}).values())
                     if job:
-                        shown = f"{doc.pdf_name} {self.jobs.settings_text(settings, job)}  ({shown})"
+                        shown = f"{doc.pdf_name} {self.settings_text(settings, job)}  ({shown})"
                     values = (doc.pages or "", shown, label, text)
                 else:
                     red = bool(problem)
@@ -794,6 +907,14 @@ class PrintHubView:
                 elif state == "sent":
                     text = f"{order.number}: sent. Take the pages off when they're done."
                     buttons = [("Pages collected", lambda p=pid: self.collected(p))]
+                elif state == "turn":
+                    name = part.get("turn", "")
+                    doc = next((d for d in order.documents if d.name == name), None)
+                    tray = (orders.BYPASS if doc is not None and doc.hand_fed(self.rules) else "tray")
+                    tray = f"the {tray}" if tray == orders.BYPASS else "the tray"
+                    text = (f"{order.number} {name}: fronts sent. When they're out, turn the stack over, "
+                            f"put it back in {tray}, then press Print backs.")
+                    buttons = [("Print backs", lambda p=pid: self.send_backs(p))]
                 elif state == "failed":
                     text = f"{order.number}: NOT sent. {part.get('error', '')}"
                     buttons = [("Retry", lambda p=pid: self.retry(p))]
@@ -966,9 +1087,9 @@ class PrintHubView:
         f = ttk.Frame(dlg, padding=16)
         f.grid()
         info = [f"{doc.title}   ·   {doc.pdf_name}: {_count(doc.pages, 'page')}, {doc.print_paper}"]
-        if doc.default_sides() != "single" and doc.pages == 1:
+        if doc.default_sides(self.rules) != "single" and doc.pages == 1:
             info.append(f"Both sides were ordered, but {doc.pdf_name} has 1 page.")
-        if doc.default_sides() == "single" and doc.pages > 1:
+        if doc.default_sides(self.rules) == "single" and doc.pages > 1:
             info.append(f"One side was ordered; {doc.pdf_name} has {doc.pages} pages, "
                         f"each printed on its own sheet side.")
         info.append("Printed at actual size. The copier can't print about 4 mm at the edges: keep cut marks inside.")
@@ -977,7 +1098,7 @@ class PrintHubView:
         per_var = tk.StringVar(value=str(before.get("per_sheet") or ""))
         sheets_var = tk.StringVar(value=str(before.get("sheets") or ""))
         paper_var = tk.StringVar(value=before.get("paper_type") or doc.default_paper_type(self.rules) or "")
-        sides_var = tk.StringVar(value=SIDE_NAMES[before.get("sides") or doc.default_sides()])
+        sides_var = tk.StringVar(value=SIDE_NAMES[before.get("sides") or doc.default_sides(self.rules)])
 
         row = 1
         if quantity:
@@ -1024,14 +1145,19 @@ class PrintHubView:
                 text = f"Sheets: a whole number from 1 to {PRODUCT_MAX_SHEETS}."
             elif not paper_var.get():
                 text = "Pick the paper type."
+            elif sides == orders.HAND and doc.pages != 2:
+                text = (f"Turned by hand needs {doc.pdf_name} with 2 pages: page 1 the front, "
+                        f"page 2 the back.")
             elif sides != "single" and doc.pages == 1:
                 # Finding 5: the backs would come out blank.
                 text = (f"Both sides, but {doc.pdf_name} has 1 page: export the back as page 2, "
                         f"or choose One side.")
             else:
-                settings = doc.product_settings(int(sheets), paper_var.get(), sides)
+                settings = doc.product_settings(int(sheets), paper_var.get(), sides, self.rules)
                 job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors,
                                         PRODUCT_MAX_SHEETS)
+                if job is not None and sides == orders.HAND:
+                    hand_job(job)
                 if job is None:
                     text = "Can't print with these settings."
                 elif job["problem"]:
@@ -1039,7 +1165,8 @@ class PrintHubView:
                 else:
                     good = True
                     text = (f"{self.printers[job['printer']]['label']} · {_count(job['sheets'], 'sheet')} of paper · "
-                            f"{self.jobs.settings_text(settings, job)}")
+                            f"{self.settings_text(settings, job)}"
+                            + (" · fronts first, then turn the stack and Print backs" if job.get("hand") else ""))
                     if job["print_copies"] > jobs.MAX_COPIES:
                         text += f"\nSent as {-(-job['print_copies'] // jobs.MAX_COPIES)} jobs of at most {jobs.MAX_COPIES}."
                     result.update(sheets=int(sheets), paper_type=paper_var.get(), sides=sides)

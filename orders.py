@@ -44,6 +44,8 @@ SHEET_TOLERANCE_MM = 1.5
 BLEED_MM = (0, 7)  # a customer file may be the cut size plus up to about 3 mm bleed on each side
 SAVING_SECONDS = 3  # print.pdf changed this recently: CorelDRAW may still be writing it
 DOUBLE_SIDED = ("Both sides", "Double-sided")  # Sides choices that mean printing on both sides
+HAND = "hand"  # Layout done sides: both sides, fronts and backs sent separately, stack turned over by hand
+BYPASS = "Bypass Tray"  # where hand-fed papers are loaded
 
 
 class Document:
@@ -77,17 +79,26 @@ class Document:
     def product(self):
         return self.kind == "product"
 
-    def product_settings(self, sheets, paper_type, sides):
-        """print.pdf as the main window's per-file settings: as it is, `sheets` copies, in colour."""
-        return {"color": "color", "printer": "auto", "sides": sides, "paper": self.print_paper,
-                "per_side": "1", "paper_type": paper_type, "tray": TRAY, "copies": str(sheets), "rotate": "0"}
+    def product_settings(self, sheets, paper_type, sides, rules):
+        """print.pdf as the main window's per-file settings: as it is, `sheets` copies, in colour.
+        sides 'hand' (both sides, stack turned over by hand) is one-sided for the copier: fronts and
+        backs are sent as separate jobs. Hand-fed papers go to the Bypass Tray."""
+        return {"color": "color", "printer": "auto", "sides": "single" if sides == HAND else sides,
+                "paper": self.print_paper, "per_side": "1", "paper_type": paper_type,
+                "tray": BYPASS if self.hand_fed(rules) else TRAY, "copies": str(sheets), "rotate": "0"}
 
     def default_paper_type(self, rules):
         """The driver paper type for the customer's Paper choice (rules.json product_papers), or None."""
         return rules.get("product_papers", {}).get(self.job.get("options", {}).get("Paper"))
 
-    def default_sides(self):
-        return "long" if self.job.get("options", {}).get("Sides") in DOUBLE_SIDED else "single"
+    def hand_fed(self, rules):
+        """True when the customer's paper is loaded by hand in the Bypass Tray (rules.json hand_fed_papers)."""
+        return self.job.get("options", {}).get("Paper") in rules.get("hand_fed_papers", {}).get("papers", [])
+
+    def default_sides(self, rules):
+        if self.job.get("options", {}).get("Sides") not in DOUBLE_SIDED:
+            return "single"
+        return HAND if self.hand_fed(rules) else "long"
 
     def settings(self):
         """The job as the main window's per-file settings (app.OPTIONS), printer chosen by the rules."""
