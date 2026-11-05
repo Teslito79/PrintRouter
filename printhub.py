@@ -39,6 +39,7 @@ import analyze
 import jobs
 import orders
 import receipt
+import theme
 
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting",
@@ -163,6 +164,7 @@ class PrintHubView:
 
         self.win = tk.Toplevel(root)
         self._build()
+        theme.dark_title_bar(self.win)
         # Closing only hides the window: sending and the order progress carry on.
         self.win.protocol("WM_DELETE_WINDOW", self.win.withdraw)
         threading.Thread(target=self._send_worker, daemon=True).start()
@@ -211,6 +213,7 @@ class PrintHubView:
             upcoming = ttk.Label(box, text="", wraplength=330, style="Hint.TLabel")
             upcoming.pack(anchor="w")
             self.panels[pid] = {"state": state, "buttons": buttons, "next": upcoming}
+            theme.on_surface(box)
 
         run = ttk.Frame(f)
         run.grid(row=2, column=0, sticky="we", pady=10)
@@ -233,8 +236,8 @@ class PrintHubView:
             self.tree.heading(col, text=text, anchor="w")
             self.tree.column(col, width=width, stretch=stretch, anchor="w")
         self.tree.tag_configure("order", font=("Segoe UI", 12, "bold"))
-        self.tree.tag_configure("error", foreground="#B00020")
-        self.tree.tag_configure("done", foreground="#777777")
+        self.tree.tag_configure("error", foreground=theme.ERROR)
+        self.tree.tag_configure("done", foreground=theme.MUTED)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -258,7 +261,7 @@ class PrintHubView:
         if self.website is not None:
             text, red, stuck = self.website.status()
             self.sync_label.config(text="\n".join([text] + stuck),
-                                   foreground="#B00020" if red or stuck else "")
+                                   foreground=theme.ERROR if red or stuck else "")
         self.win.after(2000, self.show_sync)
 
     def is_open(self):
@@ -948,6 +951,7 @@ class PrintHubView:
             ttk.Button(row, text=label, command=lambda n=order.number: self.do_next_step(n)).pack(side="left")
         if len(rows) > 8:
             ttk.Label(self.steps_box, text=f"and {len(rows) - 8} more", style="Hint.TLabel").pack(anchor="w")
+        theme.on_surface(self.steps_box)
 
     def selected_item(self):
         """(order, item or None) for the selected row, or (None, None)."""
@@ -1166,7 +1170,7 @@ class PrintHubView:
                     if job["print_copies"] > jobs.MAX_COPIES:
                         text += f"\nSent as {-(-job['print_copies'] // jobs.MAX_COPIES)} jobs of at most {jobs.MAX_COPIES}."
                     result.update(sheets=int(sheets), paper_type=paper_var.get(), sides=sides)
-            check.config(text=text, foreground="#000000" if good else "#B00020")
+            check.config(text=text, foreground=theme.TEXT if good else theme.ERROR)
             ok.config(state="normal" if good else "disabled")
 
         def done():
@@ -1194,5 +1198,6 @@ class PrintHubView:
         for var in (sheets_var, paper_var, sides_var):
             var.trace_add("write", update)
         update()
+        theme.dark_title_bar(dlg)
         dlg.grab_set()
         dlg.focus_force()

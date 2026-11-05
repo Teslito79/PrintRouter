@@ -29,6 +29,7 @@ import printing
 import receipt
 import routing
 import sync
+import theme
 
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter"
 FILE_TYPES = [
@@ -109,12 +110,12 @@ class App:
         root = self.root
         root.title("PrintRouter")
         style = ttk.Style()
+        theme.apply(root)
         style.configure(".", font=FONT)
         style.configure("Treeview", rowheight=28)
         style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
         style.configure("Print.TButton", font=("Segoe UI", 16, "bold"), padding=10)
         style.configure("Summary.TLabel", font=("Segoe UI", 13, "bold"))
-        style.configure("Hint.TLabel", foreground="#555555")
         style.configure("Section.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
         root.option_add("*TCombobox*Listbox.font", FONT)
 
@@ -154,8 +155,8 @@ class App:
                                           ("price", "Price", 80, False)):
             self.tree.heading(col, text=text, anchor="w")
             self.tree.column(col, width=width, stretch=stretch, anchor="w")
-        self.tree.tag_configure("error", foreground="#B00020")
-        self.tree.tag_configure("loading", foreground="#777777")
+        self.tree.tag_configure("error", foreground=theme.ERROR)
+        self.tree.tag_configure("loading", foreground=theme.MUTED)
         self.tree.grid(row=0, column=0, sticky="nsew")
         scroll = ttk.Scrollbar(list_box, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -223,6 +224,8 @@ class App:
                              f"{self.printers[rs['printer']]['label']})").pack(side="left", padx=(24, 0))
 
         # Totals, receipt choice and print button
+        theme.on_surface(self.panel)
+
         self.summary = ttk.Label(f, text="", style="Summary.TLabel")
         self.summary.grid(row=3, column=0, sticky="w", padx=6)
         receipt_box = ttk.Frame(f)
@@ -743,6 +746,7 @@ def main():
         messagebox.showerror("PrintRouter", "There is a problem in rules.json:\n\n" + "\n".join(problems))
         return
     App(root)
+    theme.dark_title_bar(root)
     root.mainloop()
     # Let PDF work in progress finish first: pdfium crashes if Python shuts down under it.
     jobs.PDF_LOCK.acquire()
