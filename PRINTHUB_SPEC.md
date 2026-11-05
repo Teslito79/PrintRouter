@@ -82,7 +82,7 @@ Per printed side per copy (B&W vs. colour, by A4 / A3 / A5), plus a per-sheet ex
 ## 3. (b) Proposed file formats
 
 Three folders next to the app (`pending_folder`, `orders_folder`, `finished_folder` in `rules.json`; owner's choice 2026-11-04), **not** inside `Inbox/`, because the Inbox watcher would pick up the PDFs. An order folder moves from one to the next; its `status.json` moves with it:
-- **`Pending Orders/`** receives the orders from the website, one folder per order, named after the order number. Orders here are never printed. `Options.txt` and `print.cdr` are put in here.
+- **`Pending Orders/`** receives the orders from the website, one folder per order, named after the order number. Orders here are never printed. `Options.txt` and the blank CorelDRAW file (`PH-10240.cdr`) are put in here.
 - **`Orders/`**: once every product item of an order has Layout done (and the order has no problems), the folder moves here by itself. An order with documents only has nothing to lay out and moves at once. Only orders in here go to the copiers. If a file in the order is still open (e.g. `print.cdr` in CorelDRAW), the move waits; the app tries again every 3 seconds and shows "Laid out, but can't move to Orders: close its files".
 - **`Finished Orders/`**: when the last step (**Ready for courier / pickup**) is pressed, the whole order folder is moved here, with its `status.json`, and leaves the PrintHub list. If a file in it is still open (CorelDRAW, a PDF viewer), the move fails, the order stays listed as Ready and **Move to Finished Orders** tries again. A number that is already there gets ` (2)`.
 
@@ -103,8 +103,9 @@ Orders/
       job.json
       front.pdf, back.ai, ...  the customer's designs, in the format they uploaded, never changed
       Options.txt       written by PrintRouter: product, quantity, options, cut size, files and sizes
-      print.cdr         blank CorelDRAW file copied by PrintRouter from templates/ (blank.cdr or <product>.cdr)
-      print.pdf         exported by the owner from print.cdr: the sheet that is printed
+      PH-10231.cdr      blank CorelDRAW file copied by PrintRouter from templates/ (blank.cdr or <product>.cdr),
+                        named after the order; PH-10231-01.cdr, PH-10231-02.cdr ... when the order has several products
+      PH-10231.pdf      exported by the owner from PH-10231.cdr: the sheet that is printed
 Finished Orders/
   PH-10198/             moved here when Ready
 templates/
@@ -112,7 +113,7 @@ templates/
   bcard.cdr             optional per-product layout template, named after the product id
 ```
 
-`Options.txt` and `print.cdr` are written once, when the order is first read in Pending Orders, and never overwritten (staff may write in `Options.txt`; `print.cdr` holds the layout). Because the CorelDRAW file is called `print.cdr`, CorelDRAW suggests `print.pdf` when exporting.
+`Options.txt` and the CorelDRAW file are written once, when the order is first read in Pending Orders, and never overwritten (staff may write in `Options.txt`; the CorelDRAW file holds the layout). The CorelDRAW file is named after the order (owner, 2026-11-05), so CorelDRAW suggests the matching PDF name (`PH-10231.pdf`) on export; that PDF is the sheet that prints. A customer file may not use that name. Orders laid out earlier with `print.cdr` / `print.pdf` keep working; if both `PH-10231.pdf` and `print.pdf` are there, the item asks to delete one.
 
 ### 3.1 order.json (from the website, read-only for the app)
 
@@ -253,8 +254,8 @@ The website's paper names (`Silk 300 gsm`) are not driver names. A table in `rul
 #### Flow in the app
 
 1. **Waiting for layout.** The product item arrives with the customer files. The PrintHub view shows the product name, quantity, every option, `cut_mm` (and `folded_mm`), the note and the customer files with their page size in mm. A file whose size doesn't match `cut_mm` (with or without 2-3 mm bleed) is flagged, e.g. "95 x 60 mm, ordered 85 x 55 mm". The owner fixes it in CorelDRAW.
-2. **Open print.cdr** opens the blank CorelDRAW file (or the product's template) copied into the item; **Open <file>** opens a customer file in its default program, the same way Windows would on a double click. `Options.txt` in the folder lists what was ordered.
-3. The owner lays out the sheet in `print.cdr` (e.g. 8 cards per A4 with cut marks) and exports **`print.pdf`** into the same item folder, next to the untouched customer files.
+2. **Open PH-10231.cdr** opens the blank CorelDRAW file (or the product's template) copied into the item; **Open <file>** opens a customer file in its default program, the same way Windows would on a double click. `Options.txt` in the folder lists what was ordered.
+3. The owner lays out the sheet in `PH-10231.cdr` (e.g. 8 cards per A4 with cut marks) and exports **`PH-10231.pdf`** into the same item folder, next to the untouched customer files.
 4. The app detects `print.pdf`. It counts it as complete only once its size has stopped changing and pdfium can open it. Checks: every page is A4 or A3 (within 1 mm, either orientation); anything else is a problem shown in red. Page count is shown.
 5. **Sheets.** He types the number of sheets, or cards per sheet and the app works it out: 250 cards, 8 per sheet → 32 sheets (rounded up). The sheet number becomes the **copies** of `print.pdf`. If `print.pdf` already holds every sheet as its own page, he enters 1.
 6. **Ready to print.** Saved in `status.json` under `layout` (sheets, time, page count of `print.pdf`). From here it is printed like a document job: actual size, no n-up, no scaling, no rasterising beyond the existing driver path.

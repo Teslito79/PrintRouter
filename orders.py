@@ -29,9 +29,12 @@ SIDES = ("single", "long", "short")
 PAPERS = ("A4", "A3", "A5")
 TRAY = "Auto Tray Select"  # orders never pick a tray; the copier does from size and paper type
 
-# Product items (PRINTHUB_SPEC.md 3.4): the owner lays them out in CorelDRAW and saves print.pdf.
+# Product items (PRINTHUB_SPEC.md 3.4): the owner lays them out in CorelDRAW and exports the sheet as a PDF.
+# The CorelDRAW file is named after the order (PH-10240.cdr; PH-10240-01.cdr, -02, ... when the order has
+# several products), so CorelDRAW offers PH-10240.pdf on export: that PDF is the sheet that prints.
+# Orders laid out before (2026-11-05) used print.cdr / print.pdf; those names still work.
 PRINT_PDF = "print.pdf"
-PRINT_CDR = "print.cdr"  # blank CorelDRAW file put in each product item; CorelDRAW then offers print.pdf on export
+PRINT_CDR = "print.cdr"
 OPTIONS_TXT = "Options.txt"  # what the customer ordered, for staff (written by PrintRouter)
 PRODUCT_FILES = (".pdf", ".png", ".jpg", ".jpeg", ".ai", ".eps", ".psd")
 MAX_PRODUCT_FILES = 5
@@ -62,6 +65,13 @@ class Document:
         self.print_paper = None  # A4 / A3, from the pages of print.pdf
         self.print_state = None  # None (no print.pdf), 'saving', 'bad' or 'ok'
         self.print_problem = None  # why print.pdf can't print (shown, but the order isn't Needs attention)
+        self.cdr_name = PRINT_CDR  # the CorelDRAW file for the layout, e.g. PH-10240.cdr (set by load_order)
+        self.pdf_name = PRINT_PDF  # the laid-out sheet exported from it, e.g. PH-10240.pdf
+
+    def cdr_path(self):
+        """The item's CorelDRAW file: the one named after the order, or an older print.cdr."""
+        new, old = self.folder / self.cdr_name, self.folder / PRINT_CDR
+        return old if not new.exists() and old.exists() else new
 
     @property
     def product(self):
@@ -214,7 +224,23 @@ def load_order(folder, rules):
         p.append("A document is listed twice")
     else:
         order.documents = [load_document(order.folder, name, rules) for name in names]
+        name_layouts(order)
     return order
+
+
+def name_layouts(order):
+    """Give each product item its CorelDRAW / PDF names after the order number, then look for the PDF."""
+    products = [d for d in order.documents if d.product]
+    for doc in products:
+        stem = order.number if len(products) == 1 else f"{order.number}-{doc.name}"
+        doc.cdr_name, doc.pdf_name = f"{stem}.cdr", f"{stem}.pdf"
+        kept = {doc.pdf_name.lower(), PRINT_PDF}
+        for path, *_ in doc.files:
+            if path.name.lower() in kept:
+                doc.problems.append(f"A customer file can't be called {path.name}: "
+                                    f"that name is kept for the laid-out sheet")
+        doc.files = [f for f in doc.files if f[0].name.lower() not in kept]
+        check_print_pdf(doc)
 
 
 def load_document(order_folder, name, rules):
@@ -317,16 +343,12 @@ def load_product(doc):
         if not _plain_name(file) or Path(file).suffix.lower() not in PRODUCT_FILES:
             p.append(f"file {file!r} must be one of {', '.join(PRODUCT_FILES)} in the item folder")
             continue
-        if file.lower() == PRINT_PDF:
-            p.append(f"A customer file can't be called {PRINT_PDF}: that name is kept for the laid-out sheet")
-            continue
         path = doc.folder / file
         if not path.is_file():
             p.append(f"{file} is missing")
             continue
         note, warning = customer_file_size(path, cut)
         doc.files.append((path, str(title or file), note, warning))
-    check_print_pdf(doc)
 
 
 def customer_file_size(path, cut):
@@ -395,10 +417,19 @@ def fits_cut(size, cut):
 
 
 def check_print_pdf(doc):
-    """Look at the owner's print.pdf: there yet, still being saved, and A4 or A3 on every page."""
-    path = doc.folder / PRINT_PDF
+    """Look at the owner's laid-out PDF (PH-10240.pdf, or an older print.pdf): there yet, still being
+    saved, and A4 or A3 on every page."""
     doc.pdf = doc.pages = doc.print_paper = doc.print_problem = doc.print_stamp = None
     doc.print_state = None
+    there = [p for p in dict.fromkeys((doc.folder / doc.pdf_name, doc.folder / PRINT_PDF)) if p.is_file()]
+    if not there:
+        return
+    if len(there) > 1:
+        doc.print_state = "bad"
+        doc.print_problem = f"Two laid-out PDFs ({there[0].name} and {there[1].name}): delete the one you don't want"
+        return
+    path = there[0]
+    doc.pdf_name = path.name
     try:
         st = path.stat()
     except OSError:
@@ -407,15 +438,15 @@ def check_print_pdf(doc):
     # A time in the future (a PC or share whose clock is ahead) doesn't count as saving.
     if 0 <= time.time() - st.st_mtime < SAVING_SECONDS:
         doc.print_state = "saving"
-        doc.print_problem = f"{PRINT_PDF} is still being saved"
+        doc.print_problem = f"{doc.pdf_name} is still being saved"
         return
     try:
         sizes = cached_sizes_mm(path)
     except Exception as e:
-        doc.print_state, doc.print_problem = "bad", f"Can't open {PRINT_PDF}: {e}"
+        doc.print_state, doc.print_problem = "bad", f"Can't open {doc.pdf_name}: {e}"
         return
     if not sizes:
-        doc.print_state, doc.print_problem = "bad", f"{PRINT_PDF} has no pages"
+        doc.print_state, doc.print_problem = "bad", f"{doc.pdf_name} has no pages"
         return
     papers = set()
     for size in sizes:
@@ -424,11 +455,11 @@ def check_print_pdf(doc):
                              for turned in (sheet, sheet[::-1]))), None)
         if paper is None:
             doc.print_state = "bad"
-            doc.print_problem = f"{PRINT_PDF} has a {mm_text(size)} page: export it as A4 or A3"
+            doc.print_problem = f"{doc.pdf_name} has a {mm_text(size)} page: export it as A4 or A3"
             return
         papers.add(paper)
     if len(papers) > 1:
-        doc.print_state, doc.print_problem = "bad", f"{PRINT_PDF} mixes A4 and A3 pages: make one file per size"
+        doc.print_state, doc.print_problem = "bad", f"{doc.pdf_name} mixes A4 and A3 pages: make one file per size"
         return
     doc.pdf, doc.pages, doc.print_paper, doc.print_state = path, len(sizes), papers.pop(), "ok"
 
@@ -464,7 +495,7 @@ def main():
                 print(f"    {d.name}  {d.title}")
                 for line in product_lines(d):
                     print(f"        {line}")
-                print(f"        {PRINT_PDF}: " + (f"{d.pages} p {d.print_paper}" if d.print_state == "ok"
+                print(f"        {d.pdf_name}: " + (f"{d.pages} p {d.print_paper}" if d.print_state == "ok"
                                                   else d.print_problem or "not there yet"))
                 continue
             print(f"    {d.name}  {d.title}  {d.pages or '?'} p  "

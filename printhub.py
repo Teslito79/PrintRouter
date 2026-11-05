@@ -16,9 +16,9 @@ away, if the order has documents only) the order folder moves to Orders, where i
 can print; when it is Ready for courier / pickup it moves to Finished Orders.
 
 Product items (business cards, flyers, ...) wait for the owner's layout: he opens
-the customer's file, lays out the sheet in CorelDRAW and saves print.pdf into the
-item folder, then presses Layout done and gives the number of sheets. print.pdf
-is printed as it is, at actual size. An order goes to the copiers only once all
+the CorelDRAW file named after the order (PH-10240.cdr), lays out the sheet and
+exports PH-10240.pdf into the item folder, then presses Layout done and gives the
+number of sheets. That PDF is printed as it is, at actual size. An order goes to the copiers only once all
 its product items are laid out.
 """
 import datetime
@@ -66,7 +66,7 @@ def options_text(order, doc):
     if doc.product:
         lines.append(f"{j.get('name', 'Product')}   quantity {j.get('quantity', '?')}")
         lines += [f"  {line}" for line in orders.product_lines(doc)]
-        lines += ["", f"Lay it out in {orders.PRINT_CDR} and export {orders.PRINT_PDF} into this folder,",
+        lines += ["", f"Lay it out in {doc.cdr_path().name} and export {doc.pdf_name} into this folder,",
                   "then press Layout done in PrintHub."]
     else:
         lines.append(f"Document: {doc.title}   {j.get('pages', '?')} pages")
@@ -80,15 +80,16 @@ def options_text(order, doc):
 
 
 def prepare_item(order, doc, templates):
-    """Put Options.txt (and, for products, a blank print.cdr) into the item folder, once.
-    Never overwrites: staff may have written in Options.txt or laid out print.cdr already."""
+    """Put Options.txt (and, for products, a blank CorelDRAW file named after the order) into the
+    item folder, once. Never overwrites: staff may have written in Options.txt or laid out the
+    CorelDRAW file already (an older print.cdr counts too)."""
     jobs_to_do = [(doc.folder / orders.OPTIONS_TXT, None)]
     if doc.product:
         template = templates / f"{doc.job.get('product')}.cdr"
         if not orders._plain_name(f"{doc.job.get('product')}.cdr") or not template.is_file():
             template = templates / "blank.cdr"
         if template.is_file():
-            jobs_to_do.append((doc.folder / orders.PRINT_CDR, template))
+            jobs_to_do.append((doc.cdr_path(), template))
     for dest, template in jobs_to_do:
         if dest.exists():
             continue
@@ -253,7 +254,8 @@ class PrintHubView:
                             if not item.is_dir():
                                 continue
                             for f in item.iterdir():
-                                if f.name.startswith(".") or f.name in (orders.OPTIONS_TXT, orders.PRINT_CDR):
+                                if (f.name.startswith(".") or f.name == orders.OPTIONS_TXT
+                                        or f.suffix.lower() == ".cdr"):  # CorelDRAW saves often
                                     continue
                                 try:
                                     st = f.stat()
@@ -745,7 +747,7 @@ class PrintHubView:
                     text, red = self.product_state(order, doc, job, problem)
                     shown = " · ".join(doc.job.get("options", {}).values())
                     if job:
-                        shown = f"print.pdf {self.jobs.settings_text(settings, job)}  ({shown})"
+                        shown = f"{doc.pdf_name} {self.jobs.settings_text(settings, job)}  ({shown})"
                     values = (doc.pages or "", shown, label, text)
                 else:
                     red = bool(problem)
@@ -885,7 +887,7 @@ class PrintHubView:
         if self.sent_already(order, doc):
             entry = self.status_of(order)["layout"].get(doc.name, {})
             if doc.print_stamp != entry.get("stamp"):
-                return f"Sent. {orders.PRINT_PDF} changed afterwards (not printed again)", True
+                return f"Sent. {doc.pdf_name} changed afterwards (not printed again)", True
             return "Sent", False
         entry = self.layout_of(order, doc)
         if entry:
@@ -896,17 +898,17 @@ class PrintHubView:
             wrong = next((w for *_, w in doc.files if w), None)
             return ("Waiting for layout" + (f" · file is {wrong}" if wrong else "")), False
         if doc.print_state == "saving":
-            return f"{orders.PRINT_PDF} is being saved…", False
+            return f"{doc.pdf_name} is being saved…", False
         if doc.print_state == "bad":
             return doc.print_problem, True
         if doc.name in self.status_of(order)["layout"]:
-            return f"{orders.PRINT_PDF} changed: press Layout done again", True
-        return f"{orders.PRINT_PDF} found: press Layout done", False
+            return f"{doc.pdf_name} changed: press Layout done again", True
+        return f"{doc.pdf_name} found: press Layout done", False
 
     def product_lines(self, order, doc):
         lines = [f"{doc.name}  {doc.title}"] + [f"    {line}" for line in orders.product_lines(doc)]
         if doc.print_state == "ok":
-            lines.append(f"    {orders.PRINT_PDF}: {_count(doc.pages, 'page')}, {doc.print_paper}")
+            lines.append(f"    {doc.pdf_name}: {_count(doc.pages, 'page')}, {doc.print_paper}")
         entry = self.layout_of(order, doc)
         if entry:
             lines.append(f"    Layout done {entry.get('time', '')[:16]}: {_count(entry['sheets'], 'sheet')}"
@@ -920,9 +922,9 @@ class PrintHubView:
         order, doc = self.selected_item()
         if doc is None or not doc.product:
             return
-        cdr = doc.folder / orders.PRINT_CDR
+        cdr = doc.cdr_path()
         if cdr.is_file():
-            ttk.Button(self.item_bar, text=f"Open {orders.PRINT_CDR}", style="Print.TButton",
+            ttk.Button(self.item_bar, text=f"Open {cdr.name}", style="Print.TButton",
                        command=lambda: self.open_path(cdr)).pack(side="left", padx=(0, 8))
         for path, title, _, warning in doc.files:
             ttk.Button(self.item_bar, text=f"Open {title}" + ("  (wrong size)" if warning else ""),
@@ -934,11 +936,11 @@ class PrintHubView:
                    state="normal" if can else "disabled",
                    command=lambda: self.layout_dialog(order, doc)).pack(side="left", padx=(8, 0))
         if not can and not doc.problems and not self.sent_already(order, doc):
-            hint = (f"Lay it out in {orders.PRINT_CDR}, then export {orders.PRINT_PDF} into the same folder."
+            hint = (f"Lay it out in {cdr.name}, then export {doc.pdf_name} into the same folder."
                     if doc.print_state is None else doc.print_problem or "")
             if doc.print_state is None and not cdr.is_file():
-                hint = (f"No {orders.PRINT_CDR}: save an empty CorelDRAW file as {self.templates.name}\\blank.cdr. "
-                        f"Export the laid-out sheet as {orders.PRINT_PDF} into the item folder.")
+                hint = (f"No {cdr.name}: save an empty CorelDRAW file as {self.templates.name}\\blank.cdr. "
+                        f"Export the laid-out sheet as {doc.pdf_name} into the item folder.")
             ttk.Label(self.item_bar, text=hint, style="Hint.TLabel").pack(side="left", padx=(12, 0))
 
     def open_path(self, path):
@@ -963,11 +965,11 @@ class PrintHubView:
         dlg.resizable(False, False)
         f = ttk.Frame(dlg, padding=16)
         f.grid()
-        info = [f"{doc.title}   ·   {orders.PRINT_PDF}: {_count(doc.pages, 'page')}, {doc.print_paper}"]
+        info = [f"{doc.title}   ·   {doc.pdf_name}: {_count(doc.pages, 'page')}, {doc.print_paper}"]
         if doc.default_sides() != "single" and doc.pages == 1:
-            info.append(f"Both sides were ordered, but {orders.PRINT_PDF} has 1 page.")
+            info.append(f"Both sides were ordered, but {doc.pdf_name} has 1 page.")
         if doc.default_sides() == "single" and doc.pages > 1:
-            info.append(f"One side was ordered; {orders.PRINT_PDF} has {doc.pages} pages, "
+            info.append(f"One side was ordered; {doc.pdf_name} has {doc.pages} pages, "
                         f"each printed on its own sheet side.")
         info.append("Printed at actual size. The copier can't print about 4 mm at the edges: keep cut marks inside.")
         ttk.Label(f, text="\n".join(info), justify="left", wraplength=520).grid(
@@ -982,7 +984,7 @@ class PrintHubView:
             ttk.Label(f, text=f"Pieces ordered: {quantity}.  Pieces per sheet:").grid(row=row, column=0, sticky="w")
             ttk.Entry(f, textvariable=per_var, width=8).grid(row=row, column=1, sticky="w", padx=6)
             row += 1
-        ttk.Label(f, text=f"Sheets (copies of {orders.PRINT_PDF}):").grid(row=row, column=0, sticky="w", pady=4)
+        ttk.Label(f, text=f"Sheets (copies of {doc.pdf_name}):").grid(row=row, column=0, sticky="w", pady=4)
         ttk.Entry(f, textvariable=sheets_var, width=8).grid(row=row, column=1, sticky="w", padx=6)
         row += 1
         ttk.Label(f, text="Paper type:").grid(row=row, column=0, sticky="w", pady=4)
@@ -1024,7 +1026,7 @@ class PrintHubView:
                 text = "Pick the paper type."
             elif sides != "single" and doc.pages == 1:
                 # Finding 5: the backs would come out blank.
-                text = (f"Both sides, but {orders.PRINT_PDF} has 1 page: export the back as page 2, "
+                text = (f"Both sides, but {doc.pdf_name} has 1 page: export the back as page 2, "
                         f"or choose One side.")
             else:
                 settings = doc.product_settings(int(sheets), paper_var.get(), sides)
