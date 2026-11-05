@@ -43,7 +43,8 @@ import routing
 
 SAMPLES_FOLDER = "sample_orders"
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
-STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting"}
+STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting",
+              "STAPLE": "Stapling"}
 # Part states that keep a copier taken. 'turn': fronts of a hand-turned item are out, waiting for Print backs.
 BUSY = ("sending", "turn", "sent", "failed", "interrupted")
 PRODUCT_MAX_SHEETS = 9999  # products: more than 999 are sent as several jobs (jobs.MAX_COPIES each)
@@ -63,6 +64,8 @@ def options_text(order, doc):
     when = order.paid_at.strftime("%Y-%m-%d %H:%M") if order.paid_at else "?"
     lines = [f"Order {order.number}   item {doc.name}", f"Paid {when}   Delivery: {order.delivery}",
              f"Steps: {' > '.join(map(str, order.steps))}"]
+    if order.courier:
+        lines.append(f"Courier: {orders.COURIERS[order.courier]}")
     if order.note:
         lines.append(f"Order note: {order.note}")
     lines.append("")
@@ -77,6 +80,7 @@ def options_text(order, doc):
         lines += [f"  Copies: {j.get('copies')}", f"  Colour: {j.get('color')}",
                   f"  Sides: {sides.get(j.get('sides'), j.get('sides'))}", f"  Paper: {j.get('paper')}",
                   f"  Pages per side: {j.get('per_side')}", f"  Paper type: {j.get('paper_type')}"]
+        lines += [f"  {line}" for line in orders.document_lines(doc)]
     if doc.problems:
         lines += ["", "Problems:"] + [f"  {p}" for p in doc.problems]
     return "\n".join(lines) + "\n"  # written in text mode: Windows line ends are added then
@@ -132,9 +136,10 @@ def prepare_item(order, doc, templates):
 
 
 class PrintHubView:
-    def __init__(self, root, rules, shared_jobs):
+    def __init__(self, root, rules, shared_jobs, website=None):
         self.rules = rules
         self.jobs = shared_jobs
+        self.website = website  # sync.WebsiteSync, started by the main window (None in tests)
         self.printers = rules["printers"]
         self.pending = orders.pending_dir(rules)
         self.pending.mkdir(parents=True, exist_ok=True)
@@ -166,6 +171,7 @@ class PrintHubView:
         self.reload()
         self.win.after(100, self.poll)
         self.win.after(3000, self.watch)
+        self.win.after(500, self.show_sync)
 
     # ------------------------------------------------------------------ UI
 
@@ -191,6 +197,8 @@ class PrintHubView:
             ttk.Button(top, text="Add sample orders", command=self.add_samples).pack(side="left", padx=(8, 0))
         self.summary = ttk.Label(top, text="", style="Summary.TLabel")
         self.summary.pack(side="right")
+        self.sync_label = ttk.Label(top, text="", style="Hint.TLabel", justify="right")
+        self.sync_label.pack(side="right", padx=(0, 24))
 
         # One panel per copier: the order it is printing, its buttons, and what's next.
         panels = ttk.Frame(f)
@@ -248,6 +256,14 @@ class PrintHubView:
         self.details = ttk.Label(f, text="", wraplength=1100, justify="left")
         self.details.grid(row=6, column=0, sticky="we", padx=6, pady=(10, 0))
         self.refresh_run_label()
+
+    def show_sync(self):
+        """The website sync's state in the top bar: off, last check, or red when it can't connect."""
+        if self.website is not None:
+            text, red, stuck = self.website.status()
+            self.sync_label.config(text="\n".join([text] + stuck),
+                                   foreground="#B00020" if red or stuck else "")
+        self.win.after(2000, self.show_sync)
 
     def is_open(self):
         try:
@@ -978,6 +994,8 @@ class PrintHubView:
             return
         lines = [f"{order.number} · paid {order.paid_at:%Y-%m-%d %H:%M} · {order.delivery}"
                  if order.paid_at else order.number]
+        if order.courier:
+            lines[0] += f" · {orders.COURIERS[order.courier]}"
         if order.note:
             lines.append(f"Note: {order.note}")
         docs = {d.name: d for d in order.documents}
@@ -997,6 +1015,8 @@ class PrintHubView:
             lines.append("Last: " + " · ".join(f"{h['time'][11:16]} {h['event']}" for h in history[-3:]))
         if item is not None and item.product:
             lines += [""] + self.product_lines(order, item)
+        elif item is not None and orders.document_lines(item):
+            lines += ["", f"{item.name}  {item.title}"] + [f"    {line}" for line in orders.document_lines(item)]
         self.details.config(text="\n".join(lines))
 
     # -------------------------------------------------------- product items

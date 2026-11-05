@@ -28,6 +28,7 @@ import printhub
 import printing
 import receipt
 import routing
+import sync
 
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter"
 FILE_TYPES = [
@@ -67,6 +68,9 @@ class App:
         self.printers = self.rules["printers"]
         self.jobs = jobs.Jobs(self.rules, self.prices)  # routing, checks and sending, shared with PrintHub
         self.printhub = None  # the PrintHub window, once opened
+        # Website orders into Pending Orders, while the app is open (only with printhub_token.txt: the work PC).
+        self.sync = sync.WebsiteSync(self.rules)
+        self.sync.start()
 
         self.items = {}  # id -> Item, in the order they were added
         self.next_id = 1
@@ -297,7 +301,7 @@ class App:
         if self.printhub and self.printhub.is_open():
             self.printhub.show()
         else:
-            self.printhub = printhub.PrintHubView(self.root, self.rules, self.jobs)
+            self.printhub = printhub.PrintHubView(self.root, self.rules, self.jobs, self.sync)
 
     # ------------------------------------------------------------- the jobs
 

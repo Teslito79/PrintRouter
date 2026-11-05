@@ -100,3 +100,25 @@ HAND-FED THICK PAPER TEST (350 gsm, turned by hand) - added 2026-11-05
      (flipped left-right or top-bottom). Don't change anything: the fix is
      decided with Claude afterwards.
   8. Press "Pages collected", then delete the PH-1015 folder from Orders.
+
+
+FIRST REAL SYNC (website orders arrive by themselves) - added 2026-11-05
+  Only once the website's order feed is live (the Website chat says so).
+  1. In C:\PrintRouter\ADMIN make a text file named printhub_token.txt.
+     Put in it, on one line, the same secret you put in Vercel as
+     PRINTROUTER_TOKEN. Save. (Never send this secret in a chat.)
+     In Explorer, check it is not called printhub_token.txt.txt.
+  2. Start PrintRouter with the shortcut, open PrintHub. The top bar should
+     say "Website: checked hh:mm, 0 new" within about a minute.
+     If it says "Website sync: off", the file name is wrong.
+     If it is red ("can't connect (wrong or missing token (401))"), the
+     secret in the file doesn't match the one in Vercel.
+  3. On the website, order and pay a test document (test card
+     4242 4242 4242 4242 while the website is in test mode). Use a Word file
+     this time: Office on this PC turns it into document.pdf.
+  4. Within about a minute: the order appears in PrintHub. It moves to
+     Orders by itself (documents only). Open its folder: the Word file and
+     document.pdf are both there, and Options.txt shows the courier.
+  5. On the website's /admin page the order shows as sent to the shop.
+  6. Nothing prints until you press Start printing orders.
+  If something is red, write down the exact text from the top bar.

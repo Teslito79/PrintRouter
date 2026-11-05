@@ -135,9 +135,10 @@ templates/
 | `order` | Order number; must equal the folder name |
 | `paid_at` | ISO 8601 time. Queues are ordered by this (oldest first) |
 | `delivery` | `courier` or `pickup` (sets the last step: "Ready for courier" / "Ready for pickup") |
-| `steps` | Ordered list from: `PRINT`, `LAMINATE`, `SPIRAL`, `CUTTING` (more can be added). `PRINT` must be first. The final "Ready" step is implied, not listed. Steps apply to the whole order |
+| `steps` | Ordered list from: `PRINT`, `LAMINATE`, `SPIRAL`, `CUTTING`, `STAPLE` (more can be added; `STAPLE` shows as **Start Stapling Process**). `PRINT` must be first. The final "Ready" step is implied, not listed. Steps apply to the whole order |
 | `documents` | Subfolder names in print order |
 | `note` | Optional free text shown to staff |
+| `courier` | Optional: `boxnow` or `acs` (from the website; shown to staff as Box Now / ACS for packing) |
 
 Prices are not in the order files. The website is the price authority; the app doesn't compare or charge.
 
@@ -173,6 +174,12 @@ Built from the settings in 2.1, using the same keys and values the app already u
 | `paper` | `A4`, `A3`, `A5` | |
 | `per_side` | `1`, `2`, `4`, `6`, `8`, `9`, `16` | Must be `1` with A5 |
 | `paper_type` | the exact names in 2.1 | Website should offer only a shop-approved subset |
+| `pages_verified` | optional `true` / `false` | `false`: the website couldn't count the pages (Word, Excel, old PowerPoint); a page-count mismatch then says to check with the customer |
+| `color_pages` | optional text, e.g. `"1-3, 7"` | The customer's colour pages for `auto`; shown to staff only (the app still decides colour per page) |
+| `finish` | optional `none`, `spiral`, `staple` | Shown to staff per document |
+| `laminate_sheets` | optional whole number ≥ 0 | Sheets to laminate; shown to staff when > 0 |
+
+These four website fields (handoff 05, 2026-11-05) never change routing or printing; a wrong value adds a problem like the other fields.
 
 Deliberately **not** in job.json (the shop decides these):
 - `printer`: always Auto. Staff can override it in the PrintHub view.
@@ -336,4 +343,11 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
      - Fixes from `CODE_REVIEW.md` (2026-11-05): products may have up to 9999 sheets, sent as several jobs of at most 999 copies ("part 1 of 3"); a print.pdf with a file time in the future counts as saved; customer file sizes are cached; pieces per sheet is kept only if it gave the sheets; Both sides with a 1-page print.pdf is blocked at Layout done; images need both DPI values; job.json and customer files are watched too; product details come from one function (`orders.product_lines`).
      - Exception to "nothing starts by itself": an order given Layout done **while printing is ON** starts on its free copiers as soon as it is in Orders. Other orders that arrive still wait for Start printing orders.
      - Samples PH-1007..1011. PH-1007 has `example_layout.pdf` (8 cards per A4 with cut marks): rename it to `print.pdf` to try Layout done without CorelDRAW.
-   - b. **Website sync**: download paid orders into `Pending Orders/` safely (11), plus `printhub_options.json` (9). The website provides an authenticated route (secret token) returning paid orders and signed file links. Product format 3.4 to be agreed with the Website chat first.
+   - b. **Website sync** (built 2026-11-05, handoff 05; tested against a pretend website on the home PC, the live test waits for the website's order feed, handoff `website/04`). `sync.py`, started by the main window when the app opens:
+     - Runs only when `printhub_token.txt` is next to `app.py` (one line, the same value as `PRINTROUTER_TOKEN` in Vercel; created by Tesla on the work PC only; gitignored). Without it no network call is made and PrintHub shows "Website sync: off (no printhub_token.txt)". The token is read on every check, sent only in the `Authorization: Bearer` header to the website's API (never with file downloads), and never logged or shown.
+     - `rules.json` → `website`: `url`, `check_seconds` (60). First check about 5 s after start, then every `check_seconds`; urllib only, 30 s timeout; https only (http only to this PC, for tests). Errors never block the app.
+     - Contract: GET `/api/printrouter/orders` → `{"format": 1, "orders": [{"order": <order.json>, "items": [{"folder", "job", "files": [{"name", "url"}]}]}]}`; POST `/api/printrouter/orders/received` `{"order": "PH-10001"}` → 200 `{"ok": true}`. 401 for a wrong token. Order numbers `PH-` + digits (from PH-10001); delivery always `courier`.
+     - Per order: if the number is already in Pending Orders, Orders or Finished Orders (also `PH-… (2)`), only the confirm is sent again. Otherwise it is downloaded into `Pending Orders/.<order>.downloading` (leftovers from a closed app are removed first); a non-PDF `job.file` is converted with `convert.to_pdf` under `jobs.PDF_LOCK` into `document.pdf`, the original kept next to it, and `job.json` gets `"file": "document.pdf"`; `order.json` is written last and the folder renamed into Pending Orders, then the confirm is POSTed. A failed confirm is retried at the next check; a failed download or conversion removes the hidden folder and is tried again every check, shown in red after 3 tries in a row ("PH-10001 can't be downloaded: …"). One bad order never stops the others.
+     - Top bar of the PrintHub window: "Website sync: off …", "Website: checked 14:05, 2 new" or, in red, "Website: can't connect (…), last OK 13:58". `sync_log.txt` (gitignored): time, order number, what happened.
+     - Documents-only orders then move on to Orders by themselves as before; nothing prints before Start printing orders. Products from the website: not yet (format 3.4).
+     - `printhub_options.json` (9): not built.

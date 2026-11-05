@@ -83,6 +83,11 @@
     "_help": "Website papers loaded by hand in the Bypass Tray. Their product items are sent to the Bypass Tray, and both sides are printed by turning the stack over by hand.",
     "papers": ["Smooth white 350 gsm", "Kraft 400 gsm"]
   },
+  "website": {
+    "_help": "Website sync (stage 5b): every check_seconds PrintRouter downloads the website's paid orders into Pending Orders. Runs only when printhub_token.txt is next to the app (the work PC). url changes when the domain is bought.",
+    "url": "https://print-hub-vert.vercel.app",
+    "check_seconds": 60
+  },
   "pending_folder": "Pending Orders",
   "orders_folder": "Orders",
   "finished_folder": "Finished Orders",

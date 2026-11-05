@@ -22,7 +22,9 @@ import layout
 import routing
 
 FORMAT = 1  # the order.json / job.json format this app reads
-STEPS = ("PRINT", "LAMINATE", "SPIRAL", "CUTTING")
+STEPS = ("PRINT", "LAMINATE", "SPIRAL", "CUTTING", "STAPLE")
+COURIERS = {"boxnow": "Box Now", "acs": "ACS"}  # order.json courier (optional): shown to staff for packing
+FINISHES = {"none": "none", "spiral": "Spiral", "staple": "Staple"}  # job.json finish (website documents)
 DELIVERY = ("courier", "pickup")
 COLORS = ("bw", "color", "auto")
 SIDES = ("single", "long", "short")
@@ -116,6 +118,7 @@ class Order:
         self.delivery = None
         self.steps = []
         self.note = ""
+        self.courier = None  # boxnow / acs, from the website
         self.documents = []
         self.problems = []  # about the order itself; each document keeps its own
 
@@ -228,6 +231,11 @@ def load_order(folder, rules):
         if len(set(map(str, steps))) != len(steps):
             p.append("A step is listed twice")
     order.note = str(data.get("note") or "")
+    if "courier" in data:
+        if data["courier"] in COURIERS:
+            order.courier = data["courier"]
+        else:
+            p.append(f"courier must be {' or '.join(COURIERS)}, not {data['courier']!r}")
     names = data.get("documents")
     if not isinstance(names, list) or not names:
         p.append("documents must be a list of folder names")
@@ -286,6 +294,15 @@ def load_document(order_folder, name, rules):
         p.append("A5 is already 2 on A4: per_side must be 1")
     if not _whole(job.get("copies")) or not 1 <= job["copies"] <= 999:
         p.append(f"copies {job.get('copies')!r} must be a whole number from 1 to 999")
+    # Website fields (handoff 05): shown to staff, they don't change routing or printing.
+    if "pages_verified" in job and not isinstance(job["pages_verified"], bool):
+        p.append(f"pages_verified {job['pages_verified']!r} must be true or false")
+    if "color_pages" in job and not isinstance(job["color_pages"], str):
+        p.append(f"color_pages {job['color_pages']!r} must be text")
+    if "finish" in job and job["finish"] not in FINISHES:
+        p.append(f"finish {job['finish']!r} must be {', '.join(FINISHES)}")
+    if "laminate_sheets" in job and (not _whole(job["laminate_sheets"]) or job["laminate_sheets"] < 0):
+        p.append(f"laminate_sheets {job['laminate_sheets']!r} must be a whole number of at least 0")
 
     file = job.get("file")
     if not _plain_name(file) or Path(file).suffix.lower() != ".pdf":
@@ -301,7 +318,9 @@ def load_document(order_folder, name, rules):
         return doc
     doc.pdf = doc.folder / file
     if job.get("pages") != doc.pages:
-        p.append(f"The website counted {job.get('pages')!r} pages, the PDF has {doc.pages}")
+        why = (" (Office file: the website couldn't count it, check with the customer)"
+               if job.get("pages_verified") is False else "")
+        p.append(f"The website counted {job.get('pages')!r} pages, the PDF has {doc.pages}{why}")
     return doc
 
 
@@ -473,6 +492,20 @@ def check_print_pdf(doc):
         doc.print_state, doc.print_problem = "bad", f"{doc.pdf_name} mixes A4 and A3 pages: make one file per size"
         return
     doc.pdf, doc.pages, doc.print_paper, doc.print_state = path, len(sizes), papers.pop(), "ok"
+
+
+def document_lines(doc):
+    """The website's extras for a document item (finishing, lamination, colour pages), one line each."""
+    j, lines = doc.job, []
+    if j.get("finish") in ("spiral", "staple"):
+        lines.append(f"Finishing: {FINISHES[j['finish']]}")
+    if _whole(j.get("laminate_sheets")) and j["laminate_sheets"] > 0:
+        lines.append(f"Laminate: {j['laminate_sheets']} sheet{'s' if j['laminate_sheets'] != 1 else ''}")
+    if isinstance(j.get("color_pages"), str) and j["color_pages"].strip():
+        lines.append(f"Colour pages: {j['color_pages'].strip()}")
+    if j.get("pages_verified") is False:
+        lines.append("Pages not checked by the website")
+    return lines
 
 
 def product_lines(doc):
