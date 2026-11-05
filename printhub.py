@@ -11,6 +11,10 @@ an order are collected, its next step (Spiral, Cutting, ...) is started by
 hand, up to Ready for courier / pickup. Progress is kept in status.json in each
 order folder. See PRINTHUB_SPEC.md.
 
+Orders arrive in Pending Orders. Once every product item is laid out (or straight
+away, if the order has documents only) the order folder moves to Orders, where it
+can print; when it is Ready for courier / pickup it moves to Finished Orders.
+
 Product items (business cards, flyers, ...) wait for the owner's layout: he opens
 the customer's file, lays out the sheet in CorelDRAW and saves print.pdf into the
 item folder, then presses Layout done and gives the number of sheets. print.pdf
@@ -39,6 +43,7 @@ SAMPLES_FOLDER = "sample_orders"
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting"}
 BUSY = ("sending", "sent", "failed", "interrupted")  # part states that keep a copier taken
+PRODUCT_MAX_SHEETS = 9999  # products: more than 999 are sent as several jobs (jobs.MAX_COPIES each)
 SIDE_NAMES = {"single": "One side", "long": "Both sides, flip on long edge",
               "short": "Both sides, flip on short edge"}
 # (pdf, size, modified) -> (coverage, page colors), kept when the window is closed and opened again.
@@ -49,13 +54,72 @@ def _count(n, singular, plural=None):
     return f"{n} {singular if n == 1 else plural or singular + 's'}"
 
 
+def options_text(order, doc):
+    """Options.txt for an item: what the customer ordered, in plain words."""
+    j = doc.job
+    when = order.paid_at.strftime("%Y-%m-%d %H:%M") if order.paid_at else "?"
+    lines = [f"Order {order.number}   item {doc.name}", f"Paid {when}   Delivery: {order.delivery}",
+             f"Steps: {' > '.join(map(str, order.steps))}"]
+    if order.note:
+        lines.append(f"Order note: {order.note}")
+    lines.append("")
+    if doc.product:
+        lines.append(f"{j.get('name', 'Product')}   quantity {j.get('quantity', '?')}")
+        lines += [f"  {line}" for line in orders.product_lines(doc)]
+        lines += ["", f"Lay it out in {orders.PRINT_CDR} and export {orders.PRINT_PDF} into this folder,",
+                  "then press Layout done in PrintHub."]
+    else:
+        lines.append(f"Document: {doc.title}   {j.get('pages', '?')} pages")
+        sides = {"single": "One side", "long": "Both sides, long edge", "short": "Both sides, short edge"}
+        lines += [f"  Copies: {j.get('copies')}", f"  Colour: {j.get('color')}",
+                  f"  Sides: {sides.get(j.get('sides'), j.get('sides'))}", f"  Paper: {j.get('paper')}",
+                  f"  Pages per side: {j.get('per_side')}", f"  Paper type: {j.get('paper_type')}"]
+    if doc.problems:
+        lines += ["", "Problems:"] + [f"  {p}" for p in doc.problems]
+    return "\n".join(lines) + "\n"  # written in text mode: Windows line ends are added then
+
+
+def prepare_item(order, doc, templates):
+    """Put Options.txt (and, for products, a blank print.cdr) into the item folder, once.
+    Never overwrites: staff may have written in Options.txt or laid out print.cdr already."""
+    jobs_to_do = [(doc.folder / orders.OPTIONS_TXT, None)]
+    if doc.product:
+        template = templates / f"{doc.job.get('product')}.cdr"
+        if not orders._plain_name(f"{doc.job.get('product')}.cdr") or not template.is_file():
+            template = templates / "blank.cdr"
+        if template.is_file():
+            jobs_to_do.append((doc.folder / orders.PRINT_CDR, template))
+    for dest, template in jobs_to_do:
+        if dest.exists():
+            continue
+        tmp = dest.with_name(f".{dest.name}.tmp")
+        try:
+            if template is None:
+                tmp.write_text(options_text(order, doc), encoding="utf-8-sig")
+            else:
+                shutil.copyfile(template, tmp)
+            os.replace(tmp, dest)
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
 class PrintHubView:
     def __init__(self, root, rules, shared_jobs):
         self.rules = rules
         self.jobs = shared_jobs
         self.printers = rules["printers"]
+        self.pending = orders.pending_dir(rules)
+        self.pending.mkdir(parents=True, exist_ok=True)
         self.folder = orders.orders_dir(rules)
         self.folder.mkdir(parents=True, exist_ok=True)
+        self.move_errors = {}  # order number -> why it couldn't move from Pending Orders to Orders
+        self.laid_out = set()  # orders given Layout done while printing is ON: started when their copier is free
+        self.finished = orders.finished_dir(rules)
+        self.finished.mkdir(parents=True, exist_ok=True)
+        self.templates = orders.templates_dir(rules)
         self.orders = []  # orders.Order, oldest payment first
         # Order number -> progress, as in status.json: {"step": index into the order's steps,
         # "parts": {printer: {"documents", "state", "sent", ...}},
@@ -95,8 +159,9 @@ class PrintHubView:
         top = ttk.Frame(f)
         top.grid(row=0, column=0, sticky="we", pady=(0, 8))
         ttk.Button(top, text="Reload", command=self.reload).pack(side="left")
-        ttk.Button(top, text="Open orders folder", command=lambda: os.startfile(self.folder)).pack(
-            side="left", padx=(8, 0))
+        for folder in (self.pending, self.folder, self.finished):
+            ttk.Button(top, text=f"Open {folder.name}", command=lambda d=folder: self.open_path(d)).pack(
+                side="left", padx=(8, 0))
         if (routing.app_dir() / SAMPLES_FOLDER).is_dir():
             ttk.Button(top, text="Add sample orders", command=self.add_samples).pack(side="left", padx=(8, 0))
         self.summary = ttk.Label(top, text="", style="Summary.TLabel")
@@ -173,25 +238,33 @@ class PrintHubView:
     # -------------------------------------------------------------- loading
 
     def _signature(self):
-        """Order folders and when their order.json last changed, plus every print.pdf (products)."""
+        """Order folders and when their order.json last changed, plus every file in the item folders
+        (job.json, customer files, print.pdf), except the ones PrintRouter writes or CorelDRAW keeps saving."""
         found = []
-        try:
-            for sub in self.folder.iterdir():
-                try:
-                    found.append((sub.name, (sub / "order.json").stat().st_mtime_ns))
-                except OSError:
-                    continue  # no order.json yet: still downloading
-                try:
-                    for item in sub.iterdir():
-                        try:
-                            st = (item / orders.PRINT_PDF).stat()
-                            found.append((f"{sub.name}/{item.name}", st.st_size, st.st_mtime_ns))
-                        except OSError:
-                            pass
-                except OSError:
-                    pass
-        except OSError:
-            pass
+        for folder in (self.pending, self.folder):
+            try:
+                for sub in folder.iterdir():
+                    try:
+                        found.append((folder.name, sub.name, (sub / "order.json").stat().st_mtime_ns))
+                    except OSError:
+                        continue  # no order.json yet: still downloading
+                    try:
+                        for item in sub.iterdir():
+                            if not item.is_dir():
+                                continue
+                            for f in item.iterdir():
+                                if f.name.startswith(".") or f.name in (orders.OPTIONS_TXT, orders.PRINT_CDR):
+                                    continue
+                                try:
+                                    st = f.stat()
+                                    found.append((folder.name, f"{sub.name}/{item.name}/{f.name}",
+                                                  st.st_size, st.st_mtime_ns))
+                                except OSError:
+                                    pass
+                    except OSError:
+                        pass
+            except OSError:
+                pass
         return sorted(found)
 
     def watch(self):
@@ -200,6 +273,8 @@ class PrintHubView:
         saving = any(d.print_state == "saving" for o in self.orders for d in o.documents)
         if not self.loading and (saving or self._signature() != self.seen):
             self.reload()
+        elif not self.loading and self.move_errors:
+            self.promote()  # try again: the file that was open may be closed now
         self.win.after(3000, self.watch)
 
     def reload(self):
@@ -215,7 +290,17 @@ class PrintHubView:
         """Read the orders and analyse each PDF's colors, as the main window does for its files."""
         try:
             with jobs.PDF_LOCK:
-                found = orders.load_orders(self.folder, self.rules)
+                pending = orders.load_orders(self.pending, self.rules)
+                ready = orders.load_orders(self.folder, self.rules)
+            numbers = {o.number for o in ready}
+            for order in pending:
+                if order.number in numbers:
+                    order.problems.append(f"{order.number} is also in {self.folder.name}: remove one of them")
+            found = orders.sort_orders(pending + ready)
+            for order in found:
+                for doc in order.documents:
+                    if doc.job and doc.folder.is_dir():
+                        prepare_item(order, doc, self.templates)
             for order in found:
                 for doc in order.documents:
                     doc.coverage = doc.page_colors = None
@@ -249,6 +334,8 @@ class PrintHubView:
             self.loading = False
             self.orders = found
             self.refresh()
+            self.promote()
+            self.start_laid_out()
             if error:
                 messagebox.showwarning("PrintHub", f"Could not read the orders folder.\n\n{error}", parent=self.win)
             if self.load_again:
@@ -273,15 +360,15 @@ class PrintHubView:
         self.refresh()
 
     def add_samples(self):
-        """Copy the sample orders that aren't there yet into the orders folder, for testing."""
+        """Copy the sample orders that aren't there yet into Pending Orders, for testing."""
         added = []
         try:
             for src in sorted((routing.app_dir() / SAMPLES_FOLDER).iterdir()):
-                dest = self.folder / src.name
-                if not src.is_dir() or dest.exists():
+                dest = self.pending / src.name
+                if not src.is_dir() or dest.exists() or (self.folder / src.name).exists():
                     continue
                 # Copy under a hidden name, then rename, so a half-copied order is never read.
-                tmp = self.folder / f".{src.name}.copying"
+                tmp = self.pending / f".{src.name}.copying"
                 shutil.rmtree(tmp, ignore_errors=True)
                 shutil.copytree(src, tmp)
                 tmp.rename(dest)
@@ -289,7 +376,7 @@ class PrintHubView:
         except OSError as e:
             messagebox.showwarning("PrintHub", f"Could not copy the sample orders.\n\n{e}", parent=self.win)
         if not added:
-            messagebox.showinfo("PrintHub", "The sample orders are already in the orders folder.", parent=self.win)
+            messagebox.showinfo("PrintHub", "The sample orders are already there.", parent=self.win)
         self.reload()
 
     # ------------------------------------------------------------- progress
@@ -319,7 +406,7 @@ class PrintHubView:
         """Note the event and write the order's status.json; never leave a half-written file."""
         st = self.status[number]
         st["history"].append({"time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "event": event})
-        path = self.folder / number / "status.json"
+        path = next((o.folder for o in self.orders if o.number == number), self.folder / number) / "status.json"
         try:
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps({k: st[k] for k in ("step", "parts", "layout", "history")}, indent=1), encoding="utf-8")
@@ -358,10 +445,11 @@ class PrintHubView:
             settings = doc.product_settings(entry["sheets"], entry["paper_type"], entry["sides"])
         else:
             settings = doc.settings()
-        job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors)
+        limit = PRODUCT_MAX_SHEETS if doc.product else jobs.MAX_COPIES
+        job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors, limit)
         if job and printer and job["printer"] != printer:
             settings["printer"] = printer
-            job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors)
+            job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors, limit)
         if job is None:
             return settings, None, "Can't print with these settings"
         if doc.product:
@@ -404,7 +492,7 @@ class PrintHubView:
         """Orders waiting for this copier, oldest payment first."""
         return [o for o in self.orders if self.status_of(o)["step"] == 0 and printer in self.parts_of(o)
                 and self.part_state(o, printer) == "waiting" and not self.problems_of(o)
-                and not self.waiting_layout(o)]
+                and not self.waiting_layout(o) and not self.in_pending(o)]
 
     def busy_with(self, printer):
         """The order this copier is printing (or waiting to be collected), or None."""
@@ -448,11 +536,28 @@ class PrintHubView:
                               if self.running else
                               "Printing orders: OFF. Nothing is sent until you press Start printing orders.")
 
-    def start_next(self, printer):
-        """Send the next waiting order to this copier, if it is free."""
+    def start_laid_out(self):
+        """Orders that got Layout done while printing is ON start by themselves once they are in
+        Orders, on each of their copiers that is free (other new orders still wait for a button)."""
+        if not self.running:
+            self.laid_out.clear()
+            return
+        for number in list(self.laid_out):
+            order = next((o for o in self.orders if o.number == number), None)
+            if order is None or self.in_pending(order):
+                continue  # still moving (or the move waits for a file to be closed)
+            self.laid_out.discard(number)
+            for pid in self.parts_of(order):
+                self.start_next(pid, order)
+        self.refresh()
+
+    def start_next(self, printer, only=None):
+        """Send the next waiting order to this copier, if it is free (only: just this order, if it waits)."""
         if not self.running or self.busy_with(printer):
             return
         waiting = self.queue(printer)
+        if only is not None:
+            waiting = [o for o in waiting if o is only]
         if not waiting:
             return
         order = waiting[0]
@@ -544,7 +649,56 @@ class PrintHubView:
             return
         self.status_of(order)["step"] += 1
         self.save(number, label)
+        if self.status_of(order)["step"] >= len(order.steps):
+            self.move_finished(order)
         self.refresh()
+
+    def in_pending(self, order):
+        return order.folder.parent == self.pending
+
+    def promote(self):
+        """Move every Pending order that is ready (all products laid out, no problems) to Orders."""
+        moved = False
+        for order in [o for o in self.orders if self.in_pending(o)]:
+            if self.problems_of(order) or self.waiting_layout(order):
+                self.move_errors.pop(order.number, None)
+                continue
+            dest = self.folder / order.number
+            try:
+                if dest.exists():
+                    raise OSError(f"{self.folder.name} already has {order.number}")
+                os.replace(order.folder, dest)
+            except OSError as e:
+                if order.number not in self.move_errors:
+                    self.move_errors[order.number] = str(e)
+                    self.refresh()
+                continue
+            self.move_errors.pop(order.number, None)
+            self.orders = [o for o in self.orders if o is not order]  # back after the reload, from Orders
+            moved = True
+        if moved:
+            self.refresh()
+            self.reload()
+
+    def move_finished(self, order):
+        """Move a Ready order's folder from Orders to Finished Orders."""
+        dest = self.finished / order.number
+        n = 2
+        while dest.exists():  # the same number finished before: keep both
+            dest = self.finished / f"{order.number} ({n})"
+            n += 1
+        try:
+            os.replace(order.folder, dest)
+        except OSError as e:
+            messagebox.showwarning(
+                "PrintHub", f"Order {order.number} is ready but could not be moved to {self.finished.name}.\n\n"
+                            f"Close its files (CorelDRAW, PDF viewer, the folder in Explorer), then press "
+                            f"Move to {self.finished.name}.\n\n{e}", parent=self.win)
+            return False
+        self.status.pop(order.number, None)
+        self.orders = [o for o in self.orders if o is not order]
+        self.reload()
+        return True
 
     # ------------------------------------------------------------ the views
 
@@ -560,6 +714,10 @@ class PrintHubView:
         waiting = self.waiting_layout(order)
         if waiting and self.status_of(order)["step"] == 0:
             return f"Waiting for layout ({len(waiting)})" if len(waiting) > 1 else "Waiting for layout"
+        if self.in_pending(order):
+            if order.number in self.move_errors:
+                return f"Laid out, but can't move to {self.folder.name}: close its files"
+            return f"Moving to {self.folder.name}…"
         label, now = self.next_step(order)
         if now:
             return now
@@ -599,7 +757,8 @@ class PrintHubView:
             waiting += not bad and not ready
             when = order.paid_at.strftime("%d/%m %H:%M") if order.paid_at else "?"
             steps = " › ".join(map(str, order.steps))
-            self.tree.item(oid, values=("", f"{order.delivery} · {steps} · paid {when}", " + ".join(parts),
+            where = f"{self.pending.name} · " if self.in_pending(order) else ""
+            self.tree.item(oid, values=("", f"{where}{order.delivery} · {steps} · paid {when}", " + ".join(parts),
                                         self.order_text(order)),
                            tags=("order", "error") if bad else ("order", "done") if ready else ("order",))
         if selected and self.tree.exists(selected[0]):
@@ -610,7 +769,7 @@ class PrintHubView:
             if attention:
                 text += f" · {attention} need{'s' if attention == 1 else ''} attention"
         else:
-            self.empty_hint.config(text=f"No orders yet. Orders appear here when they arrive in\n{self.folder}")
+            self.empty_hint.config(text=f"No orders yet. Orders appear here when they arrive in\n{self.pending}")
             self.empty_hint.place(relx=0.5, rely=0.5, anchor="center")
             text = "No orders"
         self.summary.config(text=text)
@@ -654,7 +813,16 @@ class PrintHubView:
             w.destroy()
         rows = [(order, *self.next_step(order)) for order in self.orders if not self.problems_of(order)]
         rows = [(order, label, now) for order, label, now in rows if label]
-        if not rows:
+        # Ready, but the move to Finished Orders failed (a file was open): offer it again.
+        stuck = [o for o in self.orders if not self.problems_of(o) and self.status_of(o)["step"] >= len(o.steps)]
+        for order in stuck[:8]:
+            row = ttk.Frame(self.steps_box)
+            row.pack(anchor="w", fill="x", pady=2)
+            ttk.Label(row, text=f"{order.number}", width=12, font=("Segoe UI", 12, "bold")).pack(side="left")
+            ttk.Label(row, text=f"Ready for {order.delivery}", width=22).pack(side="left")
+            ttk.Button(row, text=f"Move to {self.finished.name}",
+                       command=lambda o=order: self.move_finished(o) and self.refresh()).pack(side="left")
+        if not rows and not stuck:
             ttk.Label(self.steps_box, text="No order is waiting for its next step.", style="Hint.TLabel").pack(
                 anchor="w")
         for order, label, now in rows[:8]:
@@ -736,18 +904,7 @@ class PrintHubView:
         return f"{orders.PRINT_PDF} found: press Layout done", False
 
     def product_lines(self, order, doc):
-        j = doc.job
-        lines = [f"{doc.name}  {doc.title}"]
-        lines += [f"    {k}: {v}" for k, v in j.get("options", {}).items()]
-        cut = orders._size_mm(j.get("cut_mm"))
-        folded = orders._size_mm(j.get("folded_mm"))
-        if cut:
-            lines.append(f"    Cut size: {orders.mm_text(cut)}"
-                         + (f", folded {orders.mm_text(folded)}" if folded else ""))
-        if j.get("note"):
-            lines.append(f"    Customer note: {j['note']}")
-        for _, title, note, warning in doc.files:
-            lines.append(f"    File: {title}  ({note})" + (f"   WRONG SIZE: {warning}" if warning else ""))
+        lines = [f"{doc.name}  {doc.title}"] + [f"    {line}" for line in orders.product_lines(doc)]
         if doc.print_state == "ok":
             lines.append(f"    {orders.PRINT_PDF}: {_count(doc.pages, 'page')}, {doc.print_paper}")
         entry = self.layout_of(order, doc)
@@ -763,6 +920,10 @@ class PrintHubView:
         order, doc = self.selected_item()
         if doc is None or not doc.product:
             return
+        cdr = doc.folder / orders.PRINT_CDR
+        if cdr.is_file():
+            ttk.Button(self.item_bar, text=f"Open {orders.PRINT_CDR}", style="Print.TButton",
+                       command=lambda: self.open_path(cdr)).pack(side="left", padx=(0, 8))
         for path, title, _, warning in doc.files:
             ttk.Button(self.item_bar, text=f"Open {title}" + ("  (wrong size)" if warning else ""),
                        command=lambda p=path: self.open_path(p)).pack(side="left", padx=(0, 8))
@@ -773,8 +934,11 @@ class PrintHubView:
                    state="normal" if can else "disabled",
                    command=lambda: self.layout_dialog(order, doc)).pack(side="left", padx=(8, 0))
         if not can and not doc.problems and not self.sent_already(order, doc):
-            hint = (f"Save the laid-out sheet as {orders.PRINT_PDF} in the item folder." if doc.print_state is None
-                    else doc.print_problem or "")
+            hint = (f"Lay it out in {orders.PRINT_CDR}, then export {orders.PRINT_PDF} into the same folder."
+                    if doc.print_state is None else doc.print_problem or "")
+            if doc.print_state is None and not cdr.is_file():
+                hint = (f"No {orders.PRINT_CDR}: save an empty CorelDRAW file as {self.templates.name}\\blank.cdr. "
+                        f"Export the laid-out sheet as {orders.PRINT_PDF} into the item folder.")
             ttk.Label(self.item_bar, text=hint, style="Hint.TLabel").pack(side="left", padx=(12, 0))
 
     def open_path(self, path):
@@ -854,13 +1018,18 @@ class PrintHubView:
             sides = next(k for k, v in SIDE_NAMES.items() if v == sides_var.get())
             sheets = sheets_var.get().strip()
             good = False
-            if not (sheets.isdigit() and 1 <= int(sheets) <= 999):
-                text = "Sheets: a whole number from 1 to 999."
+            if not (sheets.isdigit() and 1 <= int(sheets) <= PRODUCT_MAX_SHEETS):
+                text = f"Sheets: a whole number from 1 to {PRODUCT_MAX_SHEETS}."
             elif not paper_var.get():
                 text = "Pick the paper type."
+            elif sides != "single" and doc.pages == 1:
+                # Finding 5: the backs would come out blank.
+                text = (f"Both sides, but {orders.PRINT_PDF} has 1 page: export the back as page 2, "
+                        f"or choose One side.")
             else:
                 settings = doc.product_settings(int(sheets), paper_var.get(), sides)
-                job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors)
+                job = self.jobs.job_for(doc.title, settings, doc.pages, doc.coverage, doc.page_colors,
+                                        PRODUCT_MAX_SHEETS)
                 if job is None:
                     text = "Can't print with these settings."
                 elif job["problem"]:
@@ -869,6 +1038,8 @@ class PrintHubView:
                     good = True
                     text = (f"{self.printers[job['printer']]['label']} · {_count(job['sheets'], 'sheet')} of paper · "
                             f"{self.jobs.settings_text(settings, job)}")
+                    if job["print_copies"] > jobs.MAX_COPIES:
+                        text += f"\nSent as {-(-job['print_copies'] // jobs.MAX_COPIES)} jobs of at most {jobs.MAX_COPIES}."
                     result.update(sheets=int(sheets), paper_type=paper_var.get(), sides=sides)
             check.config(text=text, foreground="#000000" if good else "#B00020")
             ok.config(state="normal" if good else "disabled")
@@ -877,14 +1048,21 @@ class PrintHubView:
             if not result:
                 return
             per = per_var.get().strip()
+            per = int(per) if per.isdigit() and int(per) > 0 and quantity else None
+            if per and math.ceil(quantity / per) != result["sheets"]:
+                per = None  # the sheets were typed by hand afterwards
             st["layout"][doc.name] = {
-                "sheets": result["sheets"], "per_sheet": int(per) if per.isdigit() and quantity else None,
+                "sheets": result["sheets"], "per_sheet": per,
                 "paper_type": result["paper_type"], "sides": result["sides"], "stamp": doc.print_stamp,
                 "pages": doc.pages, "paper": doc.print_paper,
                 "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
             self.save(order.number, f"{doc.name} layout done: {_count(result['sheets'], 'sheet')}")
             dlg.destroy()
+            if self.running:
+                self.laid_out.add(order.number)  # start it once it is in Orders, if its copier is free
             self.refresh()
+            self.promote()
+            self.start_laid_out()
 
         ok.config(command=done)
         per_var.trace_add("write", on_per_sheet)

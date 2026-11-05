@@ -14,7 +14,7 @@ Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Lea
 
 - **Home PC:** `C:\PrintHub\PrintRouter` (this repo) next to `C:\PrintHub\Website` (the shop website, a separate repo and a separate Claude chat). No copiers here: Print gives an error and driver checks are missing. Good for code, window and logic work.
 - **Work PC** (192.168.10.4, Windows 11, non-technical staff): `C:\PrintRouter` only, no website. Paper tests happen here.
-- Sync: GitHub `Teslito79/PrintRouter` (private). `Upload changes.bat` (add, commit, push) and `Download changes.bat` (pull). `PrintRouter.bat` runs `git pull --ff-only` before starting, so the work PC updates itself on launch. `orders/` is gitignored.
+- Sync: GitHub `Teslito79/PrintRouter` (private). `Upload changes.bat` (add, commit, push) and `Download changes.bat` (pull). `PrintRouter.bat` runs `git pull --ff-only` before starting, so the work PC updates itself on launch. `Pending Orders/`, `Orders/` and `Finished Orders/` are gitignored.
 
 ## What it is
 
@@ -36,7 +36,7 @@ Plan and file formats: `PRINTHUB_SPEC.md`. Stages:
 2. PrintHub view: **done** (`printhub.py`, job logic shared in `jobs.py`).
 3. Copier queues, sending, Pages collected, next-step buttons: **done**, tested with simulated copiers only (commit ba30e49).
 4. Second screen (read-only, full screen on the printer monitor): not started.
-5. a. Product items (CorelDRAW layout, `print.pdf`, Layout done, actual-size printing): **done**, tested with simulated copiers only. Samples PH-1007..1011. b. Website sync: not started. See below and `PRINTHUB_SPEC.md` 3.4 / stage 5.
+5. a. Product items (CorelDRAW layout, `print.pdf`, Layout done, actual-size printing): **done**, tested with simulated copiers only. Samples PH-1007..1011. Folders (owner, 2026-11-04): `Pending Orders/` receives orders (one folder per order number; each item holds the customer's files as uploaded, `Options.txt` and a blank `print.cdr` from `templates/`); when all products are laid out (documents-only orders at once) the folder moves to `Orders/`, the only place that prints; when Ready it moves to `Finished Orders/`. The owner still has to save `templates/blank.cdr` from CorelDRAW. b. Website sync: not started. See below and `PRINTHUB_SPEC.md` 3.4 / stage 5.
 
 **Pending first:** the paper test of stages 1-3 at work, using `WORK_TEST_CHECKLIST.txt` (not committed; the owner has a copy). Wait for his results before stage 4. Paper test of product printing at actual size (print `sample_orders/PH-1007/01/example_layout.pdf` and measure); check the example `product_papers` in `rules.json`. Open for the website: papers over 300 g/m2 (350 gsm, kraft 400 gsm) can't go through the copiers; no FOLDING step yet. Also still open from before PrintHub: paper tests of the driver path (duplex, B&W, copies, A3, A5 2-up, landscape, batches), Colour = Auto, Add to counter, Rotate sort; real prices last; PyInstaller packaging.
 

@@ -4,7 +4,7 @@ Status: 2026-11-04. Stages 1-3 built (tested with simulated copiers only; paper 
 
 ## 1. Design (as given)
 
-- Customers upload files on the PrintHub website and pay. After payment, the order is downloaded to the shop PC into `orders/<order number>/`, with one subfolder per document. Each document subfolder holds the file (PDF) and a `job.json` with its print settings. Each order has an `order.json` with the order number, delivery method and the ordered list of steps (for example PRINT, LAMINATE, SPIRAL, CUTTING).
+- Customers upload files on the PrintHub website and pay. After payment, the order is downloaded to the shop PC into `Pending Orders/<order number>/`, with one subfolder per document. Each document subfolder holds the file (PDF) and a `job.json` with its print settings. Each order has an `order.json` with the order number, delivery method and the ordered list of steps (for example PRINT, LAMINATE, SPIRAL, CUTTING).
 - A new **PrintHub** button at the top of the current interface opens the PrintHub view. The existing interface stays unchanged. The PrintHub view must reuse the existing conversion, routing and printing code, not copy it.
 - Jobs are routed to the 3 copiers by the existing routing rules, giving one queue per printer. Printers run in parallel. On one printer only one order prints at a time; jobs from different orders are never mixed.
 - **Start printing orders** sends the first order of each printer queue. When it finishes, the app shows a button for that order's next step, e.g. **Start Spiral Process**. Pressing it means the pages were removed, which frees the printer to start its next order. Later steps work the same way until the order is marked ready for courier.
@@ -81,20 +81,38 @@ Per printed side per copy (B&W vs. colour, by A4 / A3 / A5), plus a per-sheet ex
 
 ## 3. (b) Proposed file formats
 
-Everything lives in `orders/` next to the app (a new `orders_folder` key in `rules.json`), **not** inside `Inbox/`, because the Inbox watcher would pick up the PDFs. `orders/` goes into `.gitignore`, because the work PC updates itself with `git pull`. Sample orders are kept in a tracked `sample_orders/` folder and copied into `orders/` for testing.
+Three folders next to the app (`pending_folder`, `orders_folder`, `finished_folder` in `rules.json`; owner's choice 2026-11-04), **not** inside `Inbox/`, because the Inbox watcher would pick up the PDFs. An order folder moves from one to the next; its `status.json` moves with it:
+- **`Pending Orders/`** receives the orders from the website, one folder per order, named after the order number. Orders here are never printed. `Options.txt` and `print.cdr` are put in here.
+- **`Orders/`**: once every product item of an order has Layout done (and the order has no problems), the folder moves here by itself. An order with documents only has nothing to lay out and moves at once. Only orders in here go to the copiers. If a file in the order is still open (e.g. `print.cdr` in CorelDRAW), the move waits; the app tries again every 3 seconds and shows "Laid out, but can't move to Orders: close its files".
+- **`Finished Orders/`**: when the last step (**Ready for courier / pickup**) is pressed, the whole order folder is moved here, with its `status.json`, and leaves the PrintHub list. If a file in it is still open (CorelDRAW, a PDF viewer), the move fails, the order stays listed as Ready and **Move to Finished Orders** tries again. A number that is already there gets ` (2)`.
+
+All three are in `.gitignore`, because the work PC updates itself with `git pull`. Sample orders are kept in a tracked `sample_orders/` folder and copied into `Pending Orders/` for testing. An order number found in both Pending Orders and Orders is Needs attention. (An older lowercase `orders/` folder is renamed to `Orders` on start.)
 
 ```
-orders/
-  PH-10231/
+Pending Orders/
+  PH-10240/             arrived, waiting for layout
+Orders/
+  PH-10231/             laid out, printing
     order.json          written by the website (last, as the "complete" marker)
     status.json         written by PrintRouter only (progress)
-    01/
+    01/                 a document
       job.json
       document.pdf
-    02/
+      Options.txt       written by PrintRouter: the print settings in plain words
+    02/                 a product
       job.json
-      document.pdf
+      front.pdf, back.ai, ...  the customer's designs, in the format they uploaded, never changed
+      Options.txt       written by PrintRouter: product, quantity, options, cut size, files and sizes
+      print.cdr         blank CorelDRAW file copied by PrintRouter from templates/ (blank.cdr or <product>.cdr)
+      print.pdf         exported by the owner from print.cdr: the sheet that is printed
+Finished Orders/
+  PH-10198/             moved here when Ready
+templates/
+  blank.cdr             saved once by the owner from CorelDRAW (not in the repo until he adds it)
+  bcard.cdr             optional per-product layout template, named after the product id
 ```
+
+`Options.txt` and `print.cdr` are written once, when the order is first read in Pending Orders, and never overwritten (staff may write in `Options.txt`; `print.cdr` holds the layout). Because the CorelDRAW file is called `print.cdr`, CorelDRAW suggests `print.pdf` when exporting.
 
 ### 3.1 order.json (from the website, read-only for the app)
 
@@ -235,8 +253,8 @@ The website's paper names (`Silk 300 gsm`) are not driver names. A table in `rul
 #### Flow in the app
 
 1. **Waiting for layout.** The product item arrives with the customer files. The PrintHub view shows the product name, quantity, every option, `cut_mm` (and `folded_mm`), the note and the customer files with their page size in mm. A file whose size doesn't match `cut_mm` (with or without 2-3 mm bleed) is flagged, e.g. "95 x 60 mm, ordered 85 x 55 mm". The owner fixes it in CorelDRAW.
-2. **Open file** opens a customer file in its default program (PDF viewer / CorelDRAW), the same way Windows would on a double click.
-3. The owner lays out the sheet in his own CorelDRAW template (e.g. 8 cards per A4 with cut marks) and exports **`print.pdf`** into the same item folder, next to the untouched customer files.
+2. **Open print.cdr** opens the blank CorelDRAW file (or the product's template) copied into the item; **Open <file>** opens a customer file in its default program, the same way Windows would on a double click. `Options.txt` in the folder lists what was ordered.
+3. The owner lays out the sheet in `print.cdr` (e.g. 8 cards per A4 with cut marks) and exports **`print.pdf`** into the same item folder, next to the untouched customer files.
 4. The app detects `print.pdf`. It counts it as complete only once its size has stopped changing and pdfium can open it. Checks: every page is A4 or A3 (within 1 mm, either orientation); anything else is a problem shown in red. Page count is shown.
 5. **Sheets.** He types the number of sheets, or cards per sheet and the app works it out: 250 cards, 8 per sheet → 32 sheets (rounded up). The sheet number becomes the **copies** of `print.pdf`. If `print.pdf` already holds every sheet as its own page, he enters 1.
 6. **Ready to print.** Saved in `status.json` under `layout` (sheets, time, page count of `print.pdf`). From here it is printed like a document job: actual size, no n-up, no scaling, no rasterising beyond the existing driver path.
@@ -244,7 +262,7 @@ The website's paper names (`Silk 300 gsm`) are not driver names. A table in `rul
    - Paper type: from `product_papers`.
    - Sides: `Both sides` (or `Double-sided`) → `long`, otherwise `single`. Staff can change it at Layout done.
    - Colour: `color`. Printer: Auto (routing rules in 2.3), staff can override. Tray: `Auto Tray Select`.
-7. An order enters the copier queues only when **all** its product items are Ready to print. Until then it is listed as Waiting for layout. Documents in the same order wait with it, so an order is never split in time.
+7. An order enters the copier queues only when **all** its product items are Ready to print: then its folder moves from Pending Orders to Orders. Until then it is listed as Waiting for layout. Documents in the same order wait with it, so an order is never split in time.
 8. If `print.pdf` is replaced after Ready to print but before sending, the item goes back to step 4 (check again, sheets kept but shown for confirming). After sending, a changed `print.pdf` is ignored and flagged.
 
 Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quantity` not a whole number ≥ 1, `options` not label → text, `cut_mm` missing or larger than A3 (297 x 420 mm), a listed file missing or of a type not in the list.
@@ -267,7 +285,7 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
 8. **"Printers run in parallel".** The copiers print in parallel by themselves, because Windows spools each job. The app should still **send** one job at a time from one worker thread: pdfium (used to draw the pages and to analyse colour) is not safe to use from several threads at once. Sending is fast compared to printing, so this costs little.
 9. **The website can't check the drivers.** Combinations the drivers refuse (double-sided on Thick 4, Coated, Labels or Envelope) must be ruled out on the website using the same lists. Proposal: the app writes a small `printhub_options.json` from `rules.json` and the driver checks, for the website to use. The app still checks every job on arrival and marks bad orders **Needs attention** instead of printing them.
 10. **Paper-type names are driver strings** (`Thick 1(106 to 169 g/m2)`, with odd spacing). If a driver update renames one, website orders break. Acceptable for now; the arrival check (9) catches it.
-11. **Half-downloaded orders.** Sync must download into a temporary folder and rename it into `orders/` when complete, with `order.json` written last. The app ignores folders without `order.json`. Sample orders follow the same rule.
+11. **Half-downloaded orders.** Sync must download into a temporary folder and rename it into `Pending Orders/` when complete, with `order.json` written last. The app ignores folders without `order.json`. Sample orders follow the same rule.
 12. **Crash during sending.** If the app closes while a part is `sending`, on restart it can't know what printed. It must ask the staff instead of resending, to avoid printing twice.
 13. **Large orders.** `confirm_above_sheets` asks per print run today. For orders: ask once at **Start printing orders**, listing any order over the limit.
 14. **PDF page sizes.** A PDF with A3 pages ordered as A4 is scaled down to fit. The website should warn the customer; the app shows the PDF's page size next to the ordered paper.
@@ -305,5 +323,7 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
    - a. **Product items** (3.4) (done 2026-11-04, tested with simulated copiers only), built at home on sample orders, no copiers or website needed: read and check product `job.json`, `product_papers` in `rules.json`, Waiting for layout / Ready to print, **Open file**, `print.pdf` detection and checks, sheet count, printing `print.pdf` through the existing queue code. New sample orders: business cards (8 per A4, double-sided, laminated, CUTTING), a folded flyer, a mixed order (document + product), a wrong-sized customer file and a bad product `job.json`.
      - Built: `orders.py` reads product items (`kind: product`), checks the customer files' sizes (PDF/.ai pages; PNG/JPG with a saved resolution; .eps/.psd not checked) and `print.pdf` (A4 or A3 on every page, not changed in the last 3 seconds). `printhub.py`: Waiting for layout / print.pdf found / Ready to print / Sent per item; buttons **Open <file>**, **Open folder**, **Layout done…** (pieces per sheet → sheets, paper type from `product_papers` or picked, sides; shows the copier and any driver problem before confirming). The layout is kept in `status.json` → `layout`, with the size and time of `print.pdf`; a new `print.pdf` asks for Layout done again, and after sending it is ignored and flagged.
      - `driverprint.print_pdf(..., actual_size=True)` draws product sheets at 100 %, centred on the sheet (the walk-in path still fits to the printable area). Needs a paper test: print a sheet with cut marks and measure.
+     - Fixes from `CODE_REVIEW.md` (2026-11-05): products may have up to 9999 sheets, sent as several jobs of at most 999 copies ("part 1 of 3"); a print.pdf with a file time in the future counts as saved; customer file sizes are cached; pieces per sheet is kept only if it gave the sheets; Both sides with a 1-page print.pdf is blocked at Layout done; images need both DPI values; job.json and customer files are watched too; product details come from one function (`orders.product_lines`).
+     - Exception to "nothing starts by itself": an order given Layout done **while printing is ON** starts on its free copiers as soon as it is in Orders. Other orders that arrive still wait for Start printing orders.
      - Samples PH-1007..1011. PH-1007 has `example_layout.pdf` (8 cards per A4 with cut marks): rename it to `print.pdf` to try Layout done without CorelDRAW.
-   - b. **Website sync**: download paid orders into `orders/` safely (11), plus `printhub_options.json` (9). The website provides an authenticated route (secret token) returning paid orders and signed file links. Product format 3.4 to be agreed with the Website chat first.
+   - b. **Website sync**: download paid orders into `Pending Orders/` safely (11), plus `printhub_options.json` (9). The website provides an authenticated route (secret token) returning paid orders and signed file links. Product format 3.4 to be agreed with the Website chat first.

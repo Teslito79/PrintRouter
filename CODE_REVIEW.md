@@ -13,6 +13,8 @@ Test orders PH-1012 (flyers, C3000), PH-1013 (business cards, C4510 Thick 4), PH
 
 ## Findings (most severe first)
 
+**Status 2026-11-05 (home PC):** findings 1-8 fixed and tested with simulated copiers, together with "Layout done doesn't start printing by itself". The finished-orders archive is done as three folders (Pending Orders -> Orders -> Finished Orders, owner's choice), and the layout file is `print.cdr` copied from `templates/` (owner still to save `templates/blank.cdr`). Still open: picking which sample orders to add.
+
 1. **Large product orders can't pass Layout done** (`printhub.py:857`). Sheets are limited to 1-999 (`jobs.py:81` caps copies). 5000 flyers at 2 per sheet = 2500 sheets: Ready to print stays disabled. Fix: allow more sheets for products (split into several jobs of at most 999 copies, or raise the cap for product jobs).
 
 2. **print.pdf can stay "being saved" forever** (`orders.py:360`). The check `time.time() - mtime < 3` is also true when the file's time is in the future (saved from a PC or network share whose clock is ahead). The item never becomes ready and the window reloads every 3 s. Fix: treat it as saving only when `0 <= age < 3`, or compare the file's size/time between two looks instead of with the clock.

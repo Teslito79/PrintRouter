@@ -5,6 +5,9 @@ Printed/
 print_log.csv
 counter.json
 orders/
+Pending Orders/
+Orders/
+Finished Orders/
 build/
 dist/
 

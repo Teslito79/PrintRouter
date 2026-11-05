@@ -17,6 +17,7 @@ import routing
 # pdfium can only be used by one thread at a time; hold this around all PDF work
 # (converting, analysing, laying out pages, printing).
 PDF_LOCK = threading.RLock()
+MAX_COPIES = 999  # per print job (the copiers' limit); more copies are sent as several jobs
 
 
 class Jobs:
@@ -66,10 +67,11 @@ class Jobs:
 
     # ------------------------------------------------------------- the jobs
 
-    def job_for(self, name, settings, pages, coverage, page_colors):
+    def job_for(self, name, settings, pages, coverage, page_colors, max_copies=MAX_COPIES):
         """The print job for one converted file, or None if its settings can't print yet.
 
         settings: the per-file options (app.OPTIONS); coverage and page_colors come from analyze.
+        max_copies: above MAX_COPIES (PrintHub products), print_one sends several jobs.
         """
         s = settings
         if s["printer"] != "auto" and s["printer"] not in self.printers:
@@ -78,7 +80,7 @@ class Jobs:
             copies = int(s["copies"])
         except ValueError:
             return None
-        if not 1 <= copies <= 999:
+        if not 1 <= copies <= max_copies:
             return None
         per_side = int(s["per_side"])
         color_units = None
@@ -202,7 +204,16 @@ class Jobs:
                     self._send(pdf, queue_name, job, send_paper, flip, next(rotate_trays), 1,
                                f"{job['file_name']} ({n} of {job['print_copies']})")
                 return
-            self._send(pdf, queue_name, job, send_paper, flip, job["tray"], job["print_copies"], job["file_name"])
+            total = job["print_copies"]
+            if total <= MAX_COPIES:
+                self._send(pdf, queue_name, job, send_paper, flip, job["tray"], total, job["file_name"])
+                return
+            # More copies than one job may hold: several jobs, one after another on the same copier.
+            parts = -(-total // MAX_COPIES)
+            for n in range(parts):
+                copies = min(MAX_COPIES, total - n * MAX_COPIES)
+                self._send(pdf, queue_name, job, send_paper, flip, job["tray"], copies,
+                           f"{job['file_name']} (part {n + 1} of {parts})")
 
     def _send(self, pdf, queue_name, job, paper, flip, tray, copies, doc_name):
         if not job["mixed"]:

@@ -31,6 +31,8 @@ TRAY = "Auto Tray Select"  # orders never pick a tray; the copier does from size
 
 # Product items (PRINTHUB_SPEC.md 3.4): the owner lays them out in CorelDRAW and saves print.pdf.
 PRINT_PDF = "print.pdf"
+PRINT_CDR = "print.cdr"  # blank CorelDRAW file put in each product item; CorelDRAW then offers print.pdf on export
+OPTIONS_TXT = "Options.txt"  # what the customer ordered, for staff (written by PrintRouter)
 PRODUCT_FILES = (".pdf", ".png", ".jpg", ".jpeg", ".ai", ".eps", ".psd")
 MAX_PRODUCT_FILES = 5
 MAX_CUT_MM = (297, 420)  # A3: the largest the copiers print
@@ -104,8 +106,38 @@ class Order:
         return self.problems + [f"{d.name} ({d.title}): {p}" for d in self.documents for p in d.problems]
 
 
+def pending_dir(rules):
+    """Where the website's orders arrive (next to the app unless a full path is given). They wait
+    here until every product item is laid out; orders with documents only move on at once."""
+    return _named_dir(rules.get("pending_folder", "Pending Orders"))
+
+
 def orders_dir(rules):
-    return routing.app_dir() / rules.get("orders_folder", "orders")
+    """Orders ready for the copiers: moved here from Pending Orders."""
+    return _named_dir(rules.get("orders_folder", "Orders"))
+
+
+def finished_dir(rules):
+    """Where an order folder is moved once it is Ready for courier / pickup."""
+    return _named_dir(rules.get("finished_folder", "Finished Orders"))
+
+
+def templates_dir(rules):
+    """blank.cdr (and <product id>.cdr) copied into each product item as print.cdr."""
+    return _named_dir(rules.get("templates_folder", "templates"))
+
+
+def _named_dir(name):
+    folder = routing.app_dir() / name
+    # Windows ignores case: show the folder as named in rules.json (e.g. an old 'orders' becomes 'Orders').
+    try:
+        if folder.is_dir() and folder.resolve().name != folder.name and folder.resolve().name.lower() == folder.name.lower():
+            tmp = folder.with_name(folder.name + ".renaming")
+            folder.resolve().rename(tmp)
+            tmp.rename(folder)
+    except OSError:
+        pass
+    return folder
 
 
 def load_orders(folder, rules):
@@ -116,9 +148,13 @@ def load_orders(folder, rules):
     # Folders starting with '.' are still being copied in under a temporary name.
     orders = [load_order(sub, rules) for sub in sorted(folder.iterdir())
               if sub.is_dir() and not sub.name.startswith(".") and (sub / "order.json").is_file()]
+    return sort_orders(orders)
+
+
+def sort_orders(orders):
+    """Oldest payment first."""
     latest = datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)  # no date: last
-    orders.sort(key=lambda o: (o.paid_at or latest, o.number))
-    return orders
+    return sorted(orders, key=lambda o: (o.paid_at or latest, o.number))
 
 
 def _plain_name(value):
@@ -296,7 +332,7 @@ def load_product(doc):
 def customer_file_size(path, cut):
     """(size text, warning or None) for a customer file compared with the ordered cut size."""
     try:
-        sizes = file_sizes_mm(path)
+        sizes = cached_sizes_mm(path)
     except Exception as e:
         return f"can't read the size ({e})", None
     if not sizes:
@@ -308,6 +344,17 @@ def customer_file_size(path, cut):
     if not wrong:
         return text, None
     return text, f"{mm_text(wrong[0])}, ordered {mm_text(cut)}"
+
+
+_sizes = {}  # (path, size, modified) -> page sizes: files are opened again only when they change
+
+
+def cached_sizes_mm(path):
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _sizes:
+        _sizes[key] = file_sizes_mm(path)
+    return _sizes[key]
 
 
 def file_sizes_mm(path):
@@ -332,7 +379,7 @@ def file_sizes_mm(path):
     if suffix in (".png", ".jpg", ".jpeg"):
         with Image.open(path) as img:
             dpi = img.info.get("dpi")
-            if not dpi or not dpi[0] or not dpi[1] or dpi[0] < 30:
+            if not dpi or not dpi[0] or not dpi[1] or min(dpi) < 30:
                 return []  # no real resolution saved: size unknown
             return [(round(img.width * 25.4 / float(dpi[0]), 1), round(img.height * 25.4 / float(dpi[1]), 1))]
     return []
@@ -357,12 +404,13 @@ def check_print_pdf(doc):
     except OSError:
         return
     doc.print_stamp = [st.st_size, st.st_mtime_ns]
-    if time.time() - st.st_mtime < SAVING_SECONDS:
+    # A time in the future (a PC or share whose clock is ahead) doesn't count as saving.
+    if 0 <= time.time() - st.st_mtime < SAVING_SECONDS:
         doc.print_state = "saving"
         doc.print_problem = f"{PRINT_PDF} is still being saved"
         return
     try:
-        sizes = file_sizes_mm(path)
+        sizes = cached_sizes_mm(path)
     except Exception as e:
         doc.print_state, doc.print_problem = "bad", f"Can't open {PRINT_PDF}: {e}"
         return
@@ -385,6 +433,22 @@ def check_print_pdf(doc):
     doc.pdf, doc.pages, doc.print_paper, doc.print_state = path, len(sizes), papers.pop(), "ok"
 
 
+def product_lines(doc):
+    """What the customer ordered for a product item, one line each: shown in PrintHub,
+    written to Options.txt and listed by main()."""
+    j = doc.job
+    lines = [f"{k}: {v}" for k, v in (j.get("options") or {}).items()]
+    cut, folded = _size_mm(j.get("cut_mm")), _size_mm(j.get("folded_mm"))
+    if cut:
+        lines.append(f"Cut size: {mm_text(cut)}" + (f", folded {mm_text(folded)}" if folded else ""))
+    if j.get("note"):
+        lines.append(f"Customer note: {j['note']}")
+    for path, title, note, warning in doc.files:
+        name = title if title == path.name else f"{path.name} ({title})"
+        lines.append(f"File: {name}  {note}" + (f"   WRONG SIZE: {warning}" if warning else ""))
+    return lines
+
+
 def main():
     rules = routing.load_json("rules.json")
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else orders_dir(rules)
@@ -397,9 +461,9 @@ def main():
         for d in o.documents:
             j = d.job
             if d.product:
-                print(f"    {d.name}  {d.title}  " + " · ".join(f"{k}: {v}" for k, v in j.get("options", {}).items()))
-                for _, title, note, warning in d.files:
-                    print(f"        {title}  {note}" + (f"  WRONG SIZE: {warning}" if warning else ""))
+                print(f"    {d.name}  {d.title}")
+                for line in product_lines(d):
+                    print(f"        {line}")
                 print(f"        {PRINT_PDF}: " + (f"{d.pages} p {d.print_paper}" if d.print_state == "ok"
                                                   else d.print_problem or "not there yet"))
                 continue

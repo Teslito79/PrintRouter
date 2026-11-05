@@ -59,6 +59,10 @@
     "Silk 300 gsm": "Thick 4(257 to 300 g/m2)",
     "Smooth white 300 gsm": "Thick 4(257 to 300 g/m2)"
   },
+  "pending_folder": "Pending Orders",
+  "orders_folder": "Orders",
+  "finished_folder": "Finished Orders",
+  "templates_folder": "templates",
   "inbox_folder": "Inbox",
   "printed_folder": "Printed",
   "rules": [
