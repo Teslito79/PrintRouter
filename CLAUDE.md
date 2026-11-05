@@ -45,6 +45,8 @@ Changes for PrintRouter arrive as written handoff files from a separate planning
 
 Windows desktop app, Python 3.14 + Tkinter, about 3,500 lines. Staff add files (or they arrive in `Inbox\`); the app converts to PDF, picks a Ricoh copier by rules (or by hand), sends with per-job driver settings through `driverprint.py` (PrintTicket to DEVMODE, pdfium drawing via ctypes, nothing saved to printer defaults) and prints a price receipt on the XP-80C thermal printer.
 
+Look: always dark (handoff 17, 2026-11-05). Colours, the ttk style (base theme `clam`) and dark title bars are all in `theme.py`; use its constants, never hex colours in other files. Message boxes stay light (drawn by Windows).
+
 Copiers: C4510 (downstairs, Tray 1-4 + Bypass, Thick 4), C3000 (colour pictures, up to Thick 3), C3004 (colour documents). **All print A3 at most, no SRA3.** Routing rules, paper types and trays: `rules.json`. Placeholder prices: `prices.json`.
 
 There are no sample orders. To test, make temporary order folders in a temp folder (or a hidden `.test-…` folder) and delete them afterwards; never leave test orders in Pending Orders / Orders / Finished Orders.
