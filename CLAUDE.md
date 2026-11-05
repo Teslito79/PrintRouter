@@ -6,9 +6,9 @@ Last updated 2026-11-04. Read this first. Details live in `PRINTHUB_SPEC.md` (Pr
 
 Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Learns hands-on, not a programmer.
 - Direct, short, no fluff, English. Give ONE best option with the reason.
-- Every time you ask for permission (install, commit, push, run something that changes things), add one or two plain sentences on what it does, written for someone who doesn't code.
+- Whenever you report something that changes things (a commit, a push, a moved file), add one or two plain sentences on what it does, written for someone who doesn't code.
 - Never ask him to paste passwords, keys or tokens into chat.
-- Commit and push only when he asks.
+- Commit and push only as a handoff's "Commit and push" line says (see "Handoffs from the planning window"); otherwise commit nothing.
 
 ## Computers
 
@@ -19,11 +19,26 @@ Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Lea
 
 ## Handoffs from the planning window
 
-Changes for PrintRouter arrive as written handoff files from a separate planning window (`C:\PrintHub\Planning`), one `.md` per change, named `YYYY-MM-DD_NN_short-name.md`. They live in `C:\PrintHub\handoffs\app\` (from this repo: `..\..\handoffs\app\`), on the home PC only and outside this repo: never commit them or copy them into it.
-- On the home PC, at the start of a session, list `..\..\handoffs\app\` (not `done\`) and tell Tesla which handoffs are waiting, oldest first. On the work PC there are none; skip this.
-- Implement a handoff only when Tesla says to start it. Follow its Requirements and Out of scope exactly; if something in it is unclear or conflicts with this CLAUDE.md, PRINTHUB_SPEC.md or the code, ask Tesla instead of guessing.
-- Before marking a handoff done, check every item in its "Acceptance criteria".
-- When done, move the file to `..\..\handoffs\app\done\` and tell Tesla in one line, so he can tell the planning window.
+Changes for PrintRouter arrive as written handoff files from a separate planning window (`C:\PrintHub\Planning`), one `.md` per change, named `YYYY-MM-DD_NN_short-name.md`. They live in `C:\PrintHub\handoffs\app\` (from this repo: `..\..\handoffs\app\`), on the home PC only and outside this repo: never commit them or copy them into it. Decisions are made in the planning window only (Tesla, 2026-11-05).
+- On the home PC, at the start of a session, list `..\..\handoffs\app\` (not `done\` or `reports\`) and tell Tesla in one line which handoffs are waiting. Start one when Tesla says so. On the work PC there are none.
+- **Never ask Tesla anything:** no questions, no permission requests, no option menus, no "shall I commit / push?". This overrides any older line in this file about asking before installing, committing or pushing. The safety rules about printer drivers, ports, preferences and the default printer still apply in full: never change them.
+- Follow a handoff's Requirements and Out of scope exactly, and check every item in its "Acceptance criteria" before calling it done. If a handoff is unclear, conflicts with this file, `PRINTHUB_SPEC.md` or the code, or something blocks it (a needed install, a missing file, a test that needs the work PC), don't guess and don't ask: stop that part, finish what can safely be finished, and describe it in the report.
+- **Commit and push** only as the handoff says (its "Commit and push" line). If the handoff says nothing, commit nothing. The work PC pulls on every app start.
+- Never ask for or handle secrets. **Manual steps are discussed with the planning window, not here.** Steps only Tesla can do (creating `printhub_token.txt` or any password, editing files by hand, paper tests at work) go only in the report under "Steps for Tesla", one numbered step each, with exact file names and places. Don't walk Tesla through them in this chat and don't tell him to do them here. The planning window goes through them with him. If he does a step anyway and reports back, just carry on.
+- When finished (fully or not), write a report to `..\..\handoffs\app\reports\`, named like the handoff with `_report` added (e.g. `2026-11-05_05_download-website-orders_report.md`), in the format below. Then move the handoff to `..\..\handoffs\app\done\` only if its status is Done. Tell Tesla in one line: "Report written: <file name>".
+- Report format:
+  ```
+  # Report: <handoff file name>
+  Status: Done | Partly done | Not done
+  ## What changed
+  Plain words, a few lines. Files and commit, if any.
+  ## Problems
+  What went wrong or was skipped, and why. "None" if none.
+  ## Steps for Tesla
+  Numbered. "None" if none.
+  ## Questions for the planning window
+  Anything unclear that stopped work. "None" if none.
+  ```
 - `C:\PrintHub\PROJECT_LOG.md` lists decisions already made; read it when a handoff refers to it. Don't edit it.
 
 ## What it is
@@ -34,7 +49,7 @@ Copiers: C4510 (downstairs, Tray 1-4 + Bypass, Thick 4), C3000 (colour pictures,
 
 Safety rules (always):
 - Never change printer drivers, ports, preferences or the default printer.
-- Don't install or uninstall anything, or change system settings, without asking first.
+- Don't install or uninstall anything, or change system settings. If a handoff needs that, stop that part and describe it in the report.
 - Send print jobs only through normal print queue submission. Only route to queues verified on paper.
 - Don't edit files he didn't ask to change. Read-only checks are fine.
 - pdfium is not thread-safe: all PDF work runs under `jobs.PDF_LOCK`; on exit the app waits for it (closing mid-analysis crashed Python 0xC0000409).
