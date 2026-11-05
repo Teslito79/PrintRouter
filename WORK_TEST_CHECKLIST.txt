@@ -1,78 +1,48 @@
 PRINTROUTER - WORK PC CHECKLIST (updated 2026-11-05)
 ====================================================
-Two tests, in this order. Do them alone; no Claude needed at work.
+One test. Do it alone; no Claude needed at work.
 Take a phone photo of anything red or anything that looks wrong, and
 tell the planning chat at home afterwards ("check the work results").
 
-Before you start
-  - Close PrintRouter if it is open.
-  - Start it with the PrintRouter shortcut (it updates itself first).
-  - Click "PrintHub" (top right).
 
-
-TEST 1 - 350 gsm business cards, backs turned by hand
-------------------------------------------------------
-You need: 4 sheets of A4 Smooth white 350 gsm.
-
- 1. Load the 4 sheets in the Bypass Tray of the IM C4510 (downstairs).
- 2. In PrintHub, press "Add sample orders".
- 3. Press "Open Pending Orders". Delete every folder EXCEPT PH-1015.
-    Then press "Open Orders" and delete every folder there too.
-    (Otherwise the other test orders would print in step 7.)
- 4. Back in PrintHub, press "Reload". Only PH-1015 is listed.
- 5. Click PH-1015, then its item "01", then "Open folder".
-    Rename example_layout.pdf to PH-1015.pdf. Close the folder.
- 6. Back in PrintHub, click item 01 of PH-1015 and press "Layout done...".
-    Check: Paper type is Thick 4. Sides is "Both sides, turned by hand".
-    Type 4 in Sheets. Press "Ready to print".
- 7. Press "Start printing orders". Only the FRONTS come out: 4 sheets.
-    The IM C4510 panel says to turn the stack over.
- 8. Take the 4 sheets, turn the stack over, put it back in the Bypass Tray.
-    Press "Print backs". The backs print.
- 9. Check, and write down yes or no for each:
-    a. Both times it printed on the IM C4510 from the Bypass Tray.
-    b. Fronts and backs line up (the cards sit on top of each other).
-    c. The arrow on the front and the arrow on the back point to the SAME
-       edge of the sheet.
-    If c is no: write down how you turned the stack (left-right or
-    top-bottom). Don't change any setting.
-10. Press "Pages collected". Press "Stop after current orders".
-11. Press "Open Orders" and delete the PH-1015 folder.
-
-
-TEST 2 - First real website order
----------------------------------
+FIRST REAL WEBSITE ORDER
+------------------------
 Do NOT press "Start printing orders" in this test.
 
- 1. Close PrintRouter.
- 2. Open Notepad. Paste the secret code from Bitwarden (the one called
+ 1. Close PrintRouter if it is open.
+ 2. Open C:\PrintRouter\ADMIN\Pending Orders and delete every folder
+    named PH- with 4 digits (PH-1001 to PH-1015): those were test
+    orders. Do the same in C:\PrintRouter\ADMIN\Orders and
+    C:\PrintRouter\ADMIN\Finished Orders. Leave anything else.
+ 3. Open Notepad. Paste the secret code from Bitwarden (the one called
     PRINTROUTER_TOKEN). It must be one line, nothing else.
- 3. File > Save as:
+ 4. File > Save as:
       Folder:        C:\PrintRouter\ADMIN
       Save as type:  All files
       File name:     printhub_token.txt
     Press Save. Close Notepad. Never send this code in any chat.
- 4. Start PrintRouter with the shortcut and click "PrintHub".
+ 5. Start PrintRouter with the shortcut (it updates itself first) and
+    click "PrintHub" (top right). The "Add sample orders" button is gone.
     Within a minute the top bar says "Website: checked hh:mm, 0 new".
-      - "Website sync: off"  -> the file name is wrong (step 3).
+      - "Website sync: off"  -> the file name is wrong (step 4).
       - Red, with "401"      -> the code in the file doesn't match Vercel.
- 5. On the website (print-hub-vert.vercel.app) order a SHORT Word file
+ 6. On the website (print-hub-vert.vercel.app) order a SHORT Word file
     (1-2 pages). Pay with the test card 4242 4242 4242 4242,
     any future date, CVC 123.
- 6. Within about a minute the order (PH-1000x) appears in PrintHub and
+ 7. Within about a minute the order (PH-1000x) appears in PrintHub and
     moves to Orders by itself. Do NOT press Start printing orders.
- 7. Press "Open Orders", then open the order's folder (PH-1000x) and its
+ 8. Press "Open Orders", then open the order's folder (PH-1000x) and its
     folder 01. Check:
       - the Word file AND document.pdf are both there;
       - Options.txt says Courier: Box Now (or ACS).
- 8. On the website's /admin page, the order says "Sent to shop".
+ 9. On the website's /admin page, the order says "Sent to shop".
     Press its "cancelled" button there (it was only a test).
- 9. Delete the order's folder from Orders.
-10. Leave printhub_token.txt where it is: from now on real paid orders
+10. Close PrintRouter. Delete the order's folder from Orders.
+11. Leave printhub_token.txt where it is: from now on real paid orders
     arrive on this PC by themselves.
 
 
-When both tests are done
-------------------------
-Tell the planning chat at home: "check the work results", with your
-yes/no answers from Test 1 and anything red from Test 2.
+When the test is done
+---------------------
+Tell the planning chat at home: "check the work results", and say
+whether the Word file arrived as document.pdf, and anything red.

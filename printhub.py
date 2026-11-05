@@ -39,9 +39,7 @@ import analyze
 import jobs
 import orders
 import receipt
-import routing
 
-SAMPLES_FOLDER = "sample_orders"
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting",
               "STAPLE": "Stapling"}
@@ -193,8 +191,6 @@ class PrintHubView:
         for folder in (self.pending, self.folder, self.finished):
             ttk.Button(top, text=f"Open {folder.name}", command=lambda d=folder: self.open_path(d)).pack(
                 side="left", padx=(8, 0))
-        if (routing.app_dir() / SAMPLES_FOLDER).is_dir():
-            ttk.Button(top, text="Add sample orders", command=self.add_samples).pack(side="left", padx=(8, 0))
         self.summary = ttk.Label(top, text="", style="Summary.TLabel")
         self.summary.pack(side="right")
         self.sync_label = ttk.Label(top, text="", style="Hint.TLabel", justify="right")
@@ -407,26 +403,6 @@ class PrintHubView:
             self.progress.pop((number, printer), None)
             self.save(number, f"sending to {printer} failed: {msg[3]}")
         self.refresh()
-
-    def add_samples(self):
-        """Copy the sample orders that aren't there yet into Pending Orders, for testing."""
-        added = []
-        try:
-            for src in sorted((routing.app_dir() / SAMPLES_FOLDER).iterdir()):
-                dest = self.pending / src.name
-                if not src.is_dir() or dest.exists() or (self.folder / src.name).exists():
-                    continue
-                # Copy under a hidden name, then rename, so a half-copied order is never read.
-                tmp = self.pending / f".{src.name}.copying"
-                shutil.rmtree(tmp, ignore_errors=True)
-                shutil.copytree(src, tmp)
-                tmp.rename(dest)
-                added.append(src.name)
-        except OSError as e:
-            messagebox.showwarning("PrintHub", f"Could not copy the sample orders.\n\n{e}", parent=self.win)
-        if not added:
-            messagebox.showinfo("PrintHub", "The sample orders are already there.", parent=self.win)
-        self.reload()
 
     # ------------------------------------------------------------- progress
 

@@ -10,11 +10,11 @@ Status: 2026-11-04. Stages 1-3 built (tested with simulated copiers only; paper 
 - **Start printing orders** sends the first order of each printer queue. When it finishes, the app shows a button for that order's next step, e.g. **Start Spiral Process**. Pressing it means the pages were removed, which frees the printer to start its next order. Later steps work the same way until the order is marked ready for courier.
 - A second full-screen window, for the monitor at the printers, shows each order number and its next step, read-only.
 - Nothing prints automatically on arrival; printing always needs a button press.
-- Website sync (downloading paid orders) is the **last** stage. Until then, orders are fake sample folders.
+- Website sync (downloading paid orders) is the **last** stage. Sample orders (PH-1001..1015) were used during stages 1-5 and removed on 2026-11-05; real orders come from the website sync.
 
 ### Stages
-1. Order format and sample orders
-2. PrintHub view on sample orders
+1. Order format
+2. PrintHub view
 3. Printer queues, grouping and step buttons
 4. Second screen
 5. Website sync
@@ -86,7 +86,7 @@ Three folders next to the app (`pending_folder`, `orders_folder`, `finished_fold
 - **`Orders/`**: once every product item of an order has Layout done (and the order has no problems), the folder moves here by itself. An order with documents only has nothing to lay out and moves at once. Only orders in here go to the copiers. If a file in the order is still open (e.g. `print.cdr` in CorelDRAW), the move waits; the app tries again every 3 seconds and shows "Laid out, but can't move to Orders: close its files".
 - **`Finished Orders/`**: when the last step (**Ready for courier / pickup**) is pressed, the whole order folder is moved here, with its `status.json`, and leaves the PrintHub list. If a file in it is still open (CorelDRAW, a PDF viewer), the move fails, the order stays listed as Ready and **Move to Finished Orders** tries again. A number that is already there gets ` (2)`.
 
-All three are in `.gitignore`, because the work PC updates itself with `git pull`. Sample orders are kept in a tracked `sample_orders/` folder and copied into `Pending Orders/` for testing. An order number found in both Pending Orders and Orders is Needs attention. (An older lowercase `orders/` folder is renamed to `Orders` on start.)
+All three are in `.gitignore`, because the work PC updates itself with `git pull`. Sample orders (PH-1001..1015) were used during stages 1-5 and removed on 2026-11-05; real orders come from the website sync. An order number found in both Pending Orders and Orders is Needs attention. (An older lowercase `orders/` folder is renamed to `Orders` on start.)
 
 ```
 Pending Orders/
@@ -265,7 +265,7 @@ Owner's rule (2026-11-05): 80 gsm is Plain & Recycled; every other paper is Thic
 - The copier can't print both sides on Thick 4, so Layout done has a fourth Sides choice, **Both sides, turned by hand** (`status.json` → `layout` → `sides`: `"hand"`). It is the default when the customer ordered Both sides on a hand-fed paper. It needs the laid-out PDF with exactly 2 pages (page 1 front sheet, page 2 back sheet); otherwise Ready to print stays disabled with "Turned by hand needs PH-xxxx.pdf with 2 pages: page 1 the front, page 2 the back." For the driver check and routing it counts as one-sided; the paper used is the sheet count.
 - Sending: the other documents of that copier part go first, then **page 1 × sheets** as its own job (`… fronts`, split above 999 copies as usual). The part then waits in state `turn`: the copier panel says "PH-xxxx 01: fronts sent. When they're out, turn the stack over, put it back in the Bypass Tray, then press Print backs." with one button, **Print backs**; the copier takes no other order and Pages collected doesn't show. **Print backs** sends **page 2 × sheets** (`… backs`); then the part goes on as normal (`sent`, Pages collected). Several hand-turned items in one part are done one after another.
 - `status.json` keeps `fronts` (items whose fronts are out), `turn` (the item waiting for its backs) and `batch` (what the current send holds), and history records "fronts sent" / "backs sent". After a restart in `turn`, Print backs shows again and the fronts are never resent. A failed fronts or backs send shows NOT sent / Retry, and Retry resends only the step that failed. After a crash mid-send, "Everything printed" marks exactly that send as printed.
-- The backs are drawn exactly as page 2 is, with no rotation. Whether they need turning is checked in the paper test (`WORK_TEST_CHECKLIST.txt`, sample PH-1015); any fix is decided with Tesla then.
+- The backs are drawn exactly as page 2 is, with no rotation. Whether they need turning is checked in the paper test, which happens with the first real product order on a hand-fed paper (Tesla, 2026-11-05); any fix is decided with Tesla then.
 
 #### Flow in the app
 
@@ -302,7 +302,7 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
 8. **"Printers run in parallel".** The copiers print in parallel by themselves, because Windows spools each job. The app should still **send** one job at a time from one worker thread: pdfium (used to draw the pages and to analyse colour) is not safe to use from several threads at once. Sending is fast compared to printing, so this costs little.
 9. **The website can't check the drivers.** Combinations the drivers refuse (double-sided on Thick 4, Coated, Labels or Envelope) must be ruled out on the website using the same lists. Proposal: the app writes a small `printhub_options.json` from `rules.json` and the driver checks, for the website to use. The app still checks every job on arrival and marks bad orders **Needs attention** instead of printing them.
 10. **Paper-type names are driver strings** (`Thick 1(106 to 169 g/m2)`, with odd spacing). If a driver update renames one, website orders break. Acceptable for now; the arrival check (9) catches it.
-11. **Half-downloaded orders.** Sync must download into a temporary folder and rename it into `Pending Orders/` when complete, with `order.json` written last. The app ignores folders without `order.json`. Sample orders follow the same rule.
+11. **Half-downloaded orders.** Sync must download into a temporary folder and rename it into `Pending Orders/` when complete, with `order.json` written last. The app ignores folders without `order.json`. (Sample orders, used during stages 1-5, followed the same rule; they were removed on 2026-11-05.)
 12. **Crash during sending.** If the app closes while a part is `sending`, on restart it can't know what printed. It must ask the staff instead of resending, to avoid printing twice.
 13. **Large orders.** `confirm_above_sheets` asks per print run today. For orders: ask once at **Start printing orders**, listing any order over the limit.
 14. **PDF page sizes.** A PDF with A3 pages ordered as A4 is scaled down to fit. The website should warn the customer; the app shows the PDF's page size next to the ordered paper.
@@ -314,19 +314,13 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
 
 ## 5. Stage plan (refined)
 
-1. **Order format and sample orders** (done 2026-11-03): `orders.py` reads and checks order folders (run `py -3.14 orders.py sample_orders` to list them). `sample_orders/` holds:
-   - PH-1001: one B&W document, double-sided, 2 copies → C4510
-   - PH-1002: split across all three copiers (B&W → C4510, colour document → C3004, photos on Coated → C3000), then SPIRAL
-   - PH-1003: A5 flyer, Colour = Auto, Thick 1, 20 copies → C3000, then CUTTING
-   - PH-1004: Thick 4 cover → C4510, plus a 2-per-side handout, then LAMINATE, CUTTING
-   - PH-1005: bad order (A5 with 2 per side, unknown paper type, wrong page count) → Needs attention
-   - PH-1006: no `order.json` (still downloading) → skipped
+1. **Order format** (done 2026-11-03): `orders.py` reads and checks order folders (run `py -3.14 orders.py "Pending Orders"` to list them). Sample orders (PH-1001..1015) were used during stages 1-5 and removed on 2026-11-05; real orders come from the website sync.
 
    Driver checks (refused combinations) need the copiers and run in stage 2, when jobs are routed.
 2. **PrintHub view** (done 2026-11-03, driver checks still to be seen at work):
    - `jobs.py` holds the job logic moved out of `app.py` (routing, driver checks, settings text, laying out and sending, the log). Both windows use it. Checked: the old and new code give identical jobs and settings text for 279,936 setting combinations, and the moved print code differs only in its folder argument and the lock.
    - `jobs.PDF_LOCK`: all pdfium work (converting, analysing, layout, printing) runs under one lock, because pdfium is not thread-safe. On exit, the app waits for PDF work in progress, because Python crashed (0xC0000409) when it closed during an analysis.
-   - `printhub.py`: the **PrintHub** button (top right of the main window) opens the PrintHub window. It lists the orders oldest first, each document with its settings, the copier Auto picks and any problem, plus the order's note, problems and sheets per copier. It reloads by itself when order folders appear or change. **Add sample orders** copies `sample_orders/` into `orders/` (under a hidden name, then renamed). No printing yet.
+   - `printhub.py`: the **PrintHub** button (top right of the main window) opens the PrintHub window. It lists the orders oldest first, each document with its settings, the copier Auto picks and any problem, plus the order's note, problems and sheets per copier. It reloads by itself when order folders appear or change. No printing yet. (Sample orders (PH-1001..1015) were used during stages 1-5 and removed on 2026-11-05; real orders come from the website sync.)
 3. **Queues and step buttons** (done 2026-11-03, tested with simulated copiers only):
    - One panel per copier: the order it is on (sending n of m / sent / NOT sent / interrupted), its button, and the orders waiting for it. A copier's queue holds the orders that have a part for it, oldest payment first; Needs-attention orders are left out.
    - **Sending only happens on a button press.** **Start printing orders** sends the next order to every free copier and turns printing ON. While ON, **Pages collected** frees that copier and sends its next order. **Stop after current orders** turns it OFF. Orders that arrive are never sent by themselves, even while ON; press Start printing orders again.
@@ -337,12 +331,11 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
    - Closing the PrintHub window only hides it; closing the app while orders are being sent asks first. `confirm_above_sheets` asks before an order part over the limit is sent.
 4. **Second screen**: read-only full-screen window, refreshed from the same state.
 5. **Products and website sync**:
-   - a. **Product items** (3.4) (done 2026-11-04, tested with simulated copiers only), built at home on sample orders, no copiers or website needed: read and check product `job.json`, `product_papers` in `rules.json`, Waiting for layout / Ready to print, **Open file**, `print.pdf` detection and checks, sheet count, printing `print.pdf` through the existing queue code. New sample orders: business cards (8 per A4, double-sided, laminated, CUTTING), a folded flyer, a mixed order (document + product), a wrong-sized customer file and a bad product `job.json`.
+   - a. **Product items** (3.4) (done 2026-11-04, tested with simulated copiers only), built at home, no copiers or website needed: read and check product `job.json`, `product_papers` in `rules.json`, Waiting for layout / Ready to print, **Open file**, `print.pdf` detection and checks, sheet count, printing `print.pdf` through the existing queue code. Sample orders (PH-1001..1015) were used during stages 1-5 and removed on 2026-11-05; real orders come from the website sync.
      - Built: `orders.py` reads product items (`kind: product`), checks the customer files' sizes (PDF/.ai pages; PNG/JPG with a saved resolution; .eps/.psd not checked) and `print.pdf` (A4 or A3 on every page, not changed in the last 3 seconds). `printhub.py`: Waiting for layout / print.pdf found / Ready to print / Sent per item; buttons **Open <file>**, **Open folder**, **Layout done…** (pieces per sheet → sheets, paper type from `product_papers` or picked, sides; shows the copier and any driver problem before confirming). The layout is kept in `status.json` → `layout`, with the size and time of `print.pdf`; a new `print.pdf` asks for Layout done again, and after sending it is ignored and flagged.
      - `driverprint.print_pdf(..., actual_size=True)` draws product sheets at 100 %, centred on the sheet (the walk-in path still fits to the printable area). Needs a paper test: print a sheet with cut marks and measure.
      - Fixes from `CODE_REVIEW.md` (2026-11-05): products may have up to 9999 sheets, sent as several jobs of at most 999 copies ("part 1 of 3"); a print.pdf with a file time in the future counts as saved; customer file sizes are cached; pieces per sheet is kept only if it gave the sheets; Both sides with a 1-page print.pdf is blocked at Layout done; images need both DPI values; job.json and customer files are watched too; product details come from one function (`orders.product_lines`).
      - Exception to "nothing starts by itself": an order given Layout done **while printing is ON** starts on its free copiers as soon as it is in Orders. Other orders that arrive still wait for Start printing orders.
-     - Samples PH-1007..1011. PH-1007 has `example_layout.pdf` (8 cards per A4 with cut marks): rename it to `print.pdf` to try Layout done without CorelDRAW.
    - b. **Website sync** (built 2026-11-05, handoff 05; tested against a pretend website on the home PC, the live test waits for the website's order feed, handoff `website/04`). `sync.py`, started by the main window when the app opens:
      - Runs only when `printhub_token.txt` is next to `app.py` (one line, the same value as `PRINTROUTER_TOKEN` in Vercel; created by Tesla on the work PC only; gitignored). Without it no network call is made and PrintHub shows "Website sync: off (no printhub_token.txt)". The token is read on every check, sent only in the `Authorization: Bearer` header to the website's API (never with file downloads), and never logged or shown.
      - `rules.json` → `website`: `url`, `check_seconds` (60). First check about 5 s after start, then every `check_seconds`; urllib only, 30 s timeout; https only (http only to this PC, for tests). Errors never block the app.
