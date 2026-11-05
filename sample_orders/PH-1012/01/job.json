@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "kind": "product",
+  "product": "flyer",
+  "name": "Flyers",
+  "quantity": 100,
+  "options": {
+    "Size": "A5 landscape (210 x 148 mm)",
+    "Paper": "Gloss 170 gsm",
+    "Sides": "Both sides"
+  },
+  "cut_mm": [
+    210,
+    148
+  ],
+  "files": [
+    "front.pdf",
+    "back.pdf"
+  ],
+  "titles": [
+    "Summer sale flyer FRONT.pdf",
+    "Summer sale flyer BACK.pdf"
+  ],
+  "note": "Colours as close as possible to the screen please"
+}

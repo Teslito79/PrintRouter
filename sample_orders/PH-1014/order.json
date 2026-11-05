@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "order": "PH-1014",
+  "paid_at": "2026-11-05T09:40:00+02:00",
+  "delivery": "pickup",
+  "steps": [
+    "PRINT",
+    "SPIRAL"
+  ],
+  "documents": [
+    "01",
+    "02",
+    "03"
+  ],
+  "note": "Test order: split over all three copiers (01 C4510, 02 C3004, 03 C3000). Spiral 01 only."
+}

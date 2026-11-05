@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "kind": "product",
+  "product": "bcard",
+  "name": "Business cards",
+  "quantity": 250,
+  "options": {
+    "Size": "85 x 55 mm",
+    "Paper": "Silk 300 gsm",
+    "Sides": "One side",
+    "Finishing": "Matt lamination"
+  },
+  "cut_mm": [
+    85,
+    55
+  ],
+  "files": [
+    "card.pdf"
+  ],
+  "titles": [
+    "Test card final.pdf"
+  ]
+}

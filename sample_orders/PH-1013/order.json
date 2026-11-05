@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "order": "PH-1013",
+  "paid_at": "2026-11-05T09:20:00+02:00",
+  "delivery": "courier",
+  "steps": [
+    "PRINT",
+    "LAMINATE",
+    "CUTTING"
+  ],
+  "documents": [
+    "01"
+  ],
+  "note": "Test order: business cards, one side, Silk 300 gsm (expected copier: C4510, Thick 4)"
+}

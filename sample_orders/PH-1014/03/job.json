@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "file": "document.pdf",
+  "title": "Poster.pdf",
+  "pages": 1,
+  "copies": 1,
+  "color": "color",
+  "sides": "single",
+  "paper": "A3",
+  "per_side": 1,
+  "paper_type": "Plain & Recycled"
+}
