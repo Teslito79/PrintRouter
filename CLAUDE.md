@@ -12,8 +12,9 @@ Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Lea
 
 ## Computers
 
-- **Home PC:** `C:\PrintHub\PrintRouter` (this repo) next to `C:\PrintHub\Website` (the shop website, a separate repo and a separate Claude chat). No copiers here: Print gives an error and driver checks are missing. Good for code, window and logic work.
-- **Work PC** (192.168.10.4, Windows 11, non-technical staff): `C:\PrintRouter` only, no website. Paper tests happen here.
+- **Home PC:** `C:\PrintHub\PrintRouter\ADMIN` (this repo) next to `C:\PrintHub\Website` (the shop website, a separate repo and a separate Claude chat). No copiers here: Print gives an error and driver checks are missing. Good for code, window and logic work.
+- **Work PC** (192.168.10.4, Windows 11, non-technical staff): `C:\PrintRouter\ADMIN` only, no website. Paper tests happen here.
+- **ADMIN folder (owner, 2026-11-05):** on both PCs the whole repo (with `.git`, the order folders, Inbox, logs) lives in `ADMIN\`; the top folder holds only `PrintRouter.lnk`, a shortcut to `ADMIN\PrintRouter.bat`. Made by `Move into ADMIN folder.bat` (+ `tools\move_into_admin.ps1`), which also repoints old desktop / Start menu shortcuts. Nothing in the code or the .bat files uses a fixed path (`routing.app_dir()`, `%~dp0`). Open Claude chats for PrintRouter in the ADMIN folder, so this file is read.
 - Sync: GitHub `Teslito79/PrintRouter` (private). `Upload changes.bat` (add, commit, push) and `Download changes.bat` (pull). `PrintRouter.bat` runs `git pull --ff-only` before starting, so the work PC updates itself on launch. `Pending Orders/`, `Orders/` and `Finished Orders/` are gitignored.
 
 ## What it is
