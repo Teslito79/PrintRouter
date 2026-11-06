@@ -7,6 +7,10 @@ renames the folder into Pending Orders and confirms it (POST /api/printrouter/or
 An order that is already in Pending Orders, Orders or Finished Orders is only confirmed again.
 Nothing here prints: orders still print only after Start printing orders.
 
+When staff press Ready for courier, report_ready() queues a message in sync_outbox.json; it is
+sent (POST /api/printrouter/orders/status) at once and again at every check until the website
+answers. The outbox survives restarts.
+
 The token is read from the file on every check and only ever sent to the website in the
 Authorization header. It is never written to a log, shown, or put in an error text.
 Standard library only (urllib).
@@ -29,6 +33,7 @@ import routing
 
 TOKEN_FILE = "printhub_token.txt"
 LOG_FILE = "sync_log.txt"
+OUTBOX_FILE = "sync_outbox.json"  # "ready" messages waiting for the website
 TIMEOUT = 30  # seconds, for every request (and every pause while downloading a file)
 FIRST_CHECK = 5  # seconds after the app starts
 RED_AFTER = 3  # failed tries in a row before an order is shown in red
@@ -37,7 +42,9 @@ CHUNK = 1 << 16
 
 
 class SyncError(Exception):
-    pass
+    def __init__(self, text, code=None):
+        super().__init__(text)
+        self.code = code  # the website's HTTP answer, if it gave one
 
 
 def _now():
@@ -54,6 +61,7 @@ class WebsiteSync:
         self.finished = orders.finished_dir(rules)
         self.token_path = routing.app_dir() / TOKEN_FILE
         self.log_path = routing.app_dir() / LOG_FILE
+        self.outbox_path = routing.app_dir() / OUTBOX_FILE
         self.lock = threading.Lock()
         # Shown in the PrintHub window (read with status()).
         self.on = self.token_path.is_file()
@@ -62,6 +70,9 @@ class WebsiteSync:
         self.error = None  # why the last check couldn't reach the website
         self.failures = {}  # order number -> (failed tries in a row, reason)
         self.unconfirmed = set()  # downloaded, but the website didn't take the confirm yet
+        self.notices = []  # red lines for the top bar ("PH-1: website says cancelled"), until Reload
+        self.outbox = self._load_outbox()
+        self.sending = threading.Lock()  # one outbox send at a time, so nothing is sent twice
         self.wake = threading.Event()
         self.thread = None
 
@@ -99,6 +110,12 @@ class WebsiteSync:
             self.on = token is not None
         if token is None:
             return  # sync is off: no network calls at all
+        try:
+            self._check_orders(token)
+        finally:
+            self.send_outbox(token)
+
+    def _check_orders(self, token):
         self._clean_leftovers()
         try:
             data = self._json("GET", "/api/printrouter/orders", token)
@@ -230,7 +247,7 @@ class WebsiteSync:
                 raw = r.read()
         except urllib.error.HTTPError as e:
             raise SyncError({401: "wrong or missing token (401)", 404: "not found (404)"}.get(
-                e.code, f"the website answered {e.code}")) from None
+                e.code, f"the website answered {e.code}"), e.code) from None
         except urllib.error.URLError as e:
             raise SyncError(f"no connection: {getattr(e, 'reason', e)}") from None
         except (TimeoutError, OSError) as e:
@@ -251,6 +268,84 @@ class WebsiteSync:
             raise SyncError(f"{dest.name}: download answered {e.code}") from None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             raise SyncError(f"{dest.name}: download failed ({getattr(e, 'reason', e)})") from None
+
+    # ------------------------------------------------------------ Ready for courier -> website
+
+    def _load_outbox(self):
+        try:
+            data = json.loads(self.outbox_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError) as e:
+            self.log("-", f"can't read {OUTBOX_FILE}: {e}")
+            return []
+        if not isinstance(data, list):
+            return []
+        return [m for m in data if isinstance(m, dict) and isinstance(m.get("order"), str)
+                and m.get("status") == "ready"]
+
+    def _save_outbox(self):
+        """Write the outbox atomically (temp file + rename). Call with self.lock held."""
+        tmp = self.outbox_path.with_name(f".{OUTBOX_FILE}.tmp")
+        try:
+            tmp.write_text(json.dumps(self.outbox, indent=1) + "\n", encoding="utf-8")
+            os.replace(tmp, self.outbox_path)
+        except OSError as e:
+            self.log("-", f"can't write {OUTBOX_FILE}: {e}")
+
+    def report_ready(self, number):
+        """Staff pressed Ready for courier: queue the message for the website and send it now."""
+        if not self.token_path.is_file():
+            self.log(number, "ready: not reported, website sync is off")
+            return
+        with self.lock:
+            if not any(m["order"] == number for m in self.outbox):
+                self.outbox.append({"order": number, "status": "ready",
+                                    "queued_at": _now().isoformat(timespec="seconds"), "tries": 0})
+                self._save_outbox()
+        self.log(number, "ready: queued for the website")
+        threading.Thread(target=self.send_outbox, daemon=True).start()
+
+    def send_outbox(self, token=None):
+        """Send every queued message once. 200: done. 409 / 404: dropped and shown in red.
+        Anything else (401, 500, no connection): kept for the next check."""
+        token = token or self.token()
+        if token is None:
+            return
+        with self.sending:
+            with self.lock:
+                waiting = [dict(m) for m in self.outbox]
+            for msg in waiting:
+                number = msg["order"]
+                drop, note = False, None
+                try:
+                    self._json("POST", "/api/printrouter/orders/status", token,
+                               {"order": number, "status": "ready"})
+                    drop = True
+                    self.log(number, "reported ready to the website")
+                except SyncError as e:
+                    if e.code in (409, 404):
+                        drop = True
+                        why = "cancelled" if e.code == 409 else "unknown order"
+                        note = f"{number}: website says {why}"
+                        self.log(number, f"not reported ready: website says {why} ({e.code})")
+                    else:
+                        self.log(number, f"report ready failed (try {int(msg.get('tries', 0)) + 1}): {e}")
+                with self.lock:
+                    for m in self.outbox:
+                        if m["order"] == number:
+                            if drop:
+                                self.outbox.remove(m)
+                            else:
+                                m["tries"] = int(m.get("tries", 0)) + 1
+                            break
+                    if note:
+                        self.notices.append(note)
+                    self._save_outbox()
+
+    def clear_notices(self):
+        with self.lock:
+            self.notices.clear()
 
     # ------------------------------------------------------------ tidy, log, status
 
@@ -275,10 +370,11 @@ class WebsiteSync:
             if not self.on:
                 return "Website sync: off (no printhub_token.txt)", False, []
             stuck = [f"{n} can't be downloaded: {why}" for n, (tries, why) in sorted(self.failures.items())
-                     if tries >= RED_AFTER]
+                     if tries >= RED_AFTER] + self.notices
+            waiting = f", {len(self.outbox)} waiting to report" if self.outbox else ""
             if self.last_check is None:
-                return "Website: checking…", False, stuck
+                return "Website: checking…" + waiting, False, stuck
             if self.error:
                 ok = f"{self.last_ok:%H:%M}" if self.last_ok else "never"
-                return f"Website: can't connect ({self.error}), last OK {ok}", True, stuck
-            return f"Website: checked {self.last_check:%H:%M}, {self.new} new", False, stuck
+                return f"Website: can't connect ({self.error}), last OK {ok}" + waiting, True, stuck
+            return f"Website: checked {self.last_check:%H:%M}, {self.new} new" + waiting, False, stuck

@@ -212,7 +212,7 @@ class PrintHubView:
 
         top = ttk.Frame(f)
         top.grid(row=0, column=0, sticky="we", pady=(0, 8))
-        ttk.Button(top, text="Reload", command=self.reload).pack(side="left")
+        ttk.Button(top, text="Reload", command=self.press_reload).pack(side="left")
         for folder in (self.pending, self.folder, self.finished):
             ttk.Button(top, text=f"Open {folder.name}", command=lambda d=folder: self.open_path(d)).pack(
                 side="left", padx=(8, 0))
@@ -340,6 +340,12 @@ class PrintHubView:
         elif not self.loading and self.move_errors:
             self.promote()  # try again: the file that was open may be closed now
         self.win.after(3000, self.watch)
+
+    def press_reload(self):
+        """The Reload button: also clears the website's red notices (shown until then)."""
+        if self.website is not None:
+            self.website.clear_notices()
+        self.reload()
 
     def reload(self):
         if self.loading:
@@ -783,6 +789,8 @@ class PrintHubView:
         self.status_of(order)["step"] += 1
         self.save(number, label)
         if self.status_of(order)["step"] >= len(order.steps):
+            if self.website is not None:
+                self.website.report_ready(number)  # the website's admin page: Ready to ship
             self.move_finished(order)
         self.refresh()
 

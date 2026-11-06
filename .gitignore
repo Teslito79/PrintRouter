@@ -17,3 +17,5 @@ tools/SumatraPDF-*.zip
 test_results/
 printhub_token.txt
 sync_log.txt
+sync_outbox.json
+.sync_outbox.json.tmp
