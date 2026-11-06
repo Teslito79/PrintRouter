@@ -45,6 +45,8 @@ Changes for PrintRouter arrive as written handoff files from a separate planning
 
 Windows desktop app, Python 3.14 + Tkinter, about 3,500 lines. Staff add files (or they arrive in `Inbox\`); the app converts to PDF, picks a Ricoh copier by rules (or by hand), sends with per-job driver settings through `driverprint.py` (PrintTicket to DEVMODE, pdfium drawing via ctypes, nothing saved to printer defaults) and prints a price receipt on the XP-80C thermal printer.
 
+CorelDRAW templates (2026-11-06): `templates/<W>x<H>.cdr` per product size in mm; `printhub.choose_template` picks `<product id>.cdr`, then `cut_mm` WxH, then HxW, then `blank.cdr`, and Options.txt / the details show which. Size table: `PRINTHUB_SPEC.md` 3.4.
+
 Look: always dark (handoff 17, 2026-11-05). Colours, the ttk style (base theme `clam`) and dark title bars are all in `theme.py`; use its constants, never hex colours in other files. Message boxes stay light (drawn by Windows).
 
 Copiers: C4510 (downstairs, Tray 1-4 + Bypass, Thick 4), C3000 (colour pictures, up to Thick 3), C3004 (colour documents). **All print A3 at most, no SRA3.** Routing rules, paper types and trays: `rules.json`. Placeholder prices: `prices.json`.
