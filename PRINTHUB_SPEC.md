@@ -267,10 +267,46 @@ Owner's rule (2026-11-05): 80 gsm is Plain & Recycled; every other paper is Thic
 - `status.json` keeps `fronts` (items whose fronts are out), `turn` (the item waiting for its backs) and `batch` (what the current send holds), and history records "fronts sent" / "backs sent". After a restart in `turn`, Print backs shows again and the fronts are never resent. A failed fronts or backs send shows NOT sent / Retry, and Retry resends only the step that failed. After a crash mid-send, "Everything printed" marks exactly that send as printed.
 - The backs are drawn exactly as page 2 is, with no rotation. Whether they need turning is checked in the paper test, which happens with the first real product order on a hand-fed paper (Tesla, 2026-11-05); any fix is decided with Tesla then.
 
+#### CorelDRAW templates by size (2026-11-06)
+
+When a product item arrives, PrintHub copies one template from `templates/` into it as `PH-xxxxx.cdr` (once, never overwritten). First match wins, names compared without regard to case: `<product id>.cdr`, then `<W>x<H>.cdr` with `cut_mm` rounded to whole mm, then `<H>x<W>.cdr` (the same size turned), then `blank.cdr`. `Options.txt` and the PrintHub details show which one was used ("CorelDRAW template: 85x55.cdr", or "CorelDRAW template: blank.cdr (no template for 165 x 165 mm)"). The owner prints the laid-out sheet from CorelDRAW (Print preview: rows and columns) to "Microsoft Print to PDF" as `PH-xxxxx.pdf` in the item folder.
+
+The website must send these `cut_mm` values when product ordering is built:
+
+| Website size | cut_mm (open size) | Template |
+|---|---|---|
+| 85 x 55 mm, 85 x 55 mm flat | 85 x 55 | 85x55 |
+| Folded 85 x 55 mm | 170 x 55 | 170x55 |
+| 90 x 50 mm | 90 x 50 | 90x50 |
+| 90 x 55 mm | 90 x 55 | 90x55 |
+| Square 55 x 55 mm | 55 x 55 | 55x55 |
+| 100 x 70 mm | 100 x 70 | 100x70 |
+| Square 100 x 100 mm | 100 x 100 | 100x100 |
+| A7 | 74 x 105 | 74x105 |
+| A6, A6 flat | 105 x 148 | 105x148 |
+| A5, A6 folded, A5 folded to A6, A5 folded to 1/3 A5 | 148 x 210 | 148x210 |
+| A4, A4 sheet, A5 folded, A4 folded to A5, A4 folded to DL | 210 x 297 | 210x297 |
+| A3, A3 sheet, A3 folded to A4, A3 folded to 1/3 A3 | 297 x 420 | 297x420 |
+| DL 99 x 210 mm, 1/3 A4 | 99 x 210 | 99x210 |
+| DL folded | 198 x 210 | 198x210 |
+| Square 148 x 148 mm | 148 x 148 | 148x148 |
+| Square 148 mm folded | 296 x 148 | 296x148 |
+| Square 210 x 210 mm | 210 x 210 | 210x210 |
+| 210 x 74 mm | 210 x 74 | 210x74 |
+| 150 x 55 mm | 150 x 55 | 150x55 |
+| Raffle 140 x 50 mm with stub | 140 x 50 | 140x50 |
+| Envelope DL 110 x 220 mm | 110 x 220 | 110x220 |
+| Envelope C6 114 x 162 mm | 114 x 162 | 114x162 |
+| Envelope C5 162 x 229 mm | 162 x 229 | 162x229 |
+| Envelope C4 229 x 324 mm | 229 x 324 | 229x324 |
+| Envelope Square 165 x 165 mm | 165 x 165 | **missing** (blank.cdr) |
+
+`420x210.cdr` isn't used by any current website size.
+
 #### Flow in the app
 
 1. **Waiting for layout.** The product item arrives with the customer files. The PrintHub view shows the product name, quantity, every option, `cut_mm` (and `folded_mm`), the note and the customer files with their page size in mm. A file whose size doesn't match `cut_mm` (with or without 2-3 mm bleed) is flagged, e.g. "95 x 60 mm, ordered 85 x 55 mm". The owner fixes it in CorelDRAW.
-2. **Open PH-10231.cdr** opens the blank CorelDRAW file (or the product's template) copied into the item; **Open <file>** opens a customer file in its default program, the same way Windows would on a double click. `Options.txt` in the folder lists what was ordered.
+2. **Open PH-10231.cdr** opens the CorelDRAW template copied into the item (picked by size, see above); **Open <file>** opens a customer file in its default program, the same way Windows would on a double click. `Options.txt` in the folder lists what was ordered.
 3. The owner lays out the sheet in `PH-10231.cdr` (e.g. 8 cards per A4 with cut marks) and exports **`PH-10231.pdf`** into the same item folder, next to the untouched customer files.
 4. The app detects `print.pdf`. It counts it as complete only once its size has stopped changing and pdfium can open it. Checks: every page is A4 or A3 (within 1 mm, either orientation); anything else is a problem shown in red. Page count is shown.
 5. **Sheets.** He types the number of sheets, or cards per sheet and the app works it out: 250 cards, 8 per sheet → 32 sheets (rounded up). The sheet number becomes the **copies** of `print.pdf`. If `print.pdf` already holds every sheet as its own page, he enters 1.

@@ -57,7 +57,29 @@ def _count(n, singular, plural=None):
     return f"{n} {singular if n == 1 else plural or singular + 's'}"
 
 
-def options_text(order, doc):
+def choose_template(doc, templates):
+    """(template path or None, "CorelDRAW template: ..." line) for a product item. First match wins:
+    <product id>.cdr, then <W>x<H>.cdr from cut_mm in whole mm, then <H>x<W>.cdr, then blank.cdr.
+    File names compare without regard to upper/lower case."""
+    try:
+        found = {p.name.lower(): p for p in templates.iterdir() if p.is_file()}
+    except OSError:
+        found = {}
+    product = f"{doc.job.get('product')}.cdr"
+    if orders._plain_name(product) and product.lower() in found:
+        return found[product.lower()], f"CorelDRAW template: {found[product.lower()].name}"
+    cut = orders._size_mm(doc.job.get("cut_mm"))
+    if cut is not None:
+        w, h = (math.floor(v + 0.5) for v in cut)
+        for name in (f"{w}x{h}.cdr", f"{h}x{w}.cdr"):
+            if name in found:
+                return found[name], f"CorelDRAW template: {found[name].name}"
+    why = f"no template for {w} x {h} mm" if cut is not None else "no cut size"
+    blank = found.get("blank.cdr")
+    return blank, f"CorelDRAW template: {blank.name if blank else 'blank.cdr (missing!)'} ({why})"
+
+
+def options_text(order, doc, template_line=None):
     """Options.txt for an item: what the customer ordered, in plain words."""
     j = doc.job
     when = order.paid_at.strftime("%Y-%m-%d %H:%M") if order.paid_at else "?"
@@ -71,6 +93,8 @@ def options_text(order, doc):
     if doc.product:
         lines.append(f"{j.get('name', 'Product')}   quantity {j.get('quantity', '?')}")
         lines += [f"  {line}" for line in orders.product_lines(doc)]
+        if template_line:
+            lines += ["", template_line]
         lines += ["", f"Lay it out in {doc.cdr_path().name} and export {doc.pdf_name} into this folder,",
                   "then press Layout done in PrintHub."]
     else:
@@ -111,11 +135,10 @@ def prepare_item(order, doc, templates):
     item folder, once. Never overwrites: staff may have written in Options.txt or laid out the
     CorelDRAW file already (an older print.cdr counts too)."""
     jobs_to_do = [(doc.folder / orders.OPTIONS_TXT, None)]
+    line = None
     if doc.product:
-        template = templates / f"{doc.job.get('product')}.cdr"
-        if not orders._plain_name(f"{doc.job.get('product')}.cdr") or not template.is_file():
-            template = templates / "blank.cdr"
-        if template.is_file():
+        template, line = choose_template(doc, templates)
+        if template is not None:
             jobs_to_do.append((doc.cdr_path(), template))
     for dest, template in jobs_to_do:
         if dest.exists():
@@ -123,7 +146,7 @@ def prepare_item(order, doc, templates):
         tmp = dest.with_name(f".{dest.name}.tmp")
         try:
             if template is None:
-                tmp.write_text(options_text(order, doc), encoding="utf-8-sig")
+                tmp.write_text(options_text(order, doc, line), encoding="utf-8-sig")
             else:
                 shutil.copyfile(template, tmp)
             os.replace(tmp, dest)
@@ -1028,6 +1051,7 @@ class PrintHubView:
 
     def product_lines(self, order, doc):
         lines = [f"{doc.name}  {doc.title}"] + [f"    {line}" for line in orders.product_lines(doc)]
+        lines.append(f"    {choose_template(doc, self.templates)[1]}")
         if doc.print_state == "ok":
             lines.append(f"    {doc.pdf_name}: {_count(doc.pages, 'page')}, {doc.print_paper}")
         entry = self.layout_of(order, doc)
