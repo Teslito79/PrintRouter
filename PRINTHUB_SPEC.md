@@ -322,6 +322,10 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
 
 ---
 
+### 3.5 Work notes and reports (2026-11-06)
+
+Tests and tasks on the work PC run through the repo's `work\` folder. The planning window (home PC) writes notes into `work\notes\` (and files they need into `work\files\`) and commits only those two folders; they reach the work PC with the `git pull` on every PrintRouter start. At work Tesla opens the **Work PC chat** (Claude Code in `C:\PrintRouter\ADMIN`), types go, and it guides him through the oldest note, writes `work\reports\<note>_report.md`, moves the note to `work\done\` and uploads only `work\` (`git add work`). The planning window reads the report at home. Rules for both chats: `CLAUDE.md` → "Work PC chat".
+
 ## 4. Problems and decisions needed
 
 ### Decisions (made 2026-11-03)

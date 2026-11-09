@@ -1,48 +1,6 @@
-PRINTROUTER - WORK PC CHECKLIST (updated 2026-11-05)
-====================================================
-One test. Do it alone; no Claude needed at work.
-Take a phone photo of anything red or anything that looks wrong, and
-tell the planning chat at home afterwards ("check the work results").
+PRINTROUTER - WORK PC CHECKLIST
+===============================
+Work tasks now come as notes in work\notes\. Open the Work PC chat (Claude,
+folder C:\PrintRouter\ADMIN) and type go.
 
-
-FIRST REAL WEBSITE ORDER
-------------------------
-Do NOT press "Start printing orders" in this test.
-
- 1. Close PrintRouter if it is open.
- 2. Open C:\PrintRouter\ADMIN\Pending Orders and delete every folder
-    named PH- with 4 digits (PH-1001 to PH-1015): those were test
-    orders. Do the same in C:\PrintRouter\ADMIN\Orders and
-    C:\PrintRouter\ADMIN\Finished Orders. Leave anything else.
- 3. Open Notepad. Paste the secret code from Bitwarden (the one called
-    PRINTROUTER_TOKEN). It must be one line, nothing else.
- 4. File > Save as:
-      Folder:        C:\PrintRouter\ADMIN
-      Save as type:  All files
-      File name:     printhub_token.txt
-    Press Save. Close Notepad. Never send this code in any chat.
- 5. Start PrintRouter with the shortcut (it updates itself first) and
-    click "PrintHub" (top right). The "Add sample orders" button is gone.
-    Within a minute the top bar says "Website: checked hh:mm, 0 new".
-      - "Website sync: off"  -> the file name is wrong (step 4).
-      - Red, with "401"      -> the code in the file doesn't match Vercel.
- 6. On the website (print-hub-vert.vercel.app) order a SHORT Word file
-    (1-2 pages). Pay with the test card 4242 4242 4242 4242,
-    any future date, CVC 123.
- 7. Within about a minute the order (PH-1000x) appears in PrintHub and
-    moves to Orders by itself. Do NOT press Start printing orders.
- 8. Press "Open Orders", then open the order's folder (PH-1000x) and its
-    folder 01. Check:
-      - the Word file AND document.pdf are both there;
-      - Options.txt says Courier: Box Now (or ACS).
- 9. On the website's /admin page, the order says "Sent to shop".
-    Press its "cancelled" button there (it was only a test).
-10. Close PrintRouter. Delete the order's folder from Orders.
-11. Leave printhub_token.txt where it is: from now on real paid orders
-    arrive on this PC by themselves.
-
-
-When the test is done
----------------------
-Tell the planning chat at home: "check the work results", and say
-whether the Word file arrived as document.pdf, and anything red.
+2026-11-06. The first-real-order steps that were here are now in note W01.
