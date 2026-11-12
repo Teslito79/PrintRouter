@@ -80,7 +80,32 @@ def choose_template(doc, templates):
     return blank, f"CorelDRAW template: {blank.name if blank else 'blank.cdr (missing!)'} ({why})"
 
 
-def options_text(order, doc, template_line=None):
+def pieces_entry(doc, rules):
+    """(size text "85 x 55", {"A4": 8, "A3": 18}) from rules.json pieces_per_sheet for a product
+    item's cut_mm in whole mm, WxH first, then HxW (as the templates); None when not in the table."""
+    cut = orders._size_mm(doc.job.get("cut_mm"))
+    if cut is None:
+        return None
+    table = rules.get("pieces_per_sheet") or {}
+    w, h = (math.floor(v + 0.5) for v in cut)
+    for a, b in ((w, h), (h, w)):
+        entry = table.get(f"{a}x{b}")
+        if isinstance(entry, dict):
+            found = {k: v for k, v in entry.items() if k in ("A4", "A3") and orders._whole(v) and v > 0}
+            if found:
+                return f"{a} x {b}", found
+    return None
+
+
+def pieces_line(doc, rules):
+    """'Pieces per sheet: 8 on A4, 18 on A3' for Options.txt, or None."""
+    entry = pieces_entry(doc, rules)
+    if entry is None:
+        return None
+    return "Pieces per sheet: " + ", ".join(f"{entry[1][k]} on {k}" for k in ("A4", "A3") if k in entry[1])
+
+
+def options_text(order, doc, template_line=None, pieces=None):
     """Options.txt for an item: what the customer ordered, in plain words."""
     j = doc.job
     when = order.paid_at.strftime("%Y-%m-%d %H:%M") if order.paid_at else "?"
@@ -96,6 +121,8 @@ def options_text(order, doc, template_line=None):
         lines += [f"  {line}" for line in orders.product_lines(doc)]
         if template_line:
             lines += ["", template_line]
+        if pieces:
+            lines += ([] if template_line else [""]) + [pieces]
         lines += ["", f"Lay it out in {doc.cdr_path().name} and export {doc.pdf_name} into this folder,",
                   "then press Layout done in PrintHub."]
     else:
@@ -131,13 +158,14 @@ def one_page(pdf, index, out):
     return out
 
 
-def prepare_item(order, doc, templates):
+def prepare_item(order, doc, templates, rules=None):
     """Put Options.txt (and, for products, a blank CorelDRAW file named after the order) into the
     item folder, once. Never overwrites: staff may have written in Options.txt or laid out the
     CorelDRAW file already (an older print.cdr counts too)."""
     jobs_to_do = [(doc.folder / orders.OPTIONS_TXT, None)]
-    line = None
+    line = pieces = None
     if doc.product:
+        pieces = pieces_line(doc, rules or {})
         template, line = choose_template(doc, templates)
         if template is not None:
             jobs_to_do.append((doc.cdr_path(), template))
@@ -147,7 +175,7 @@ def prepare_item(order, doc, templates):
         tmp = dest.with_name(f".{dest.name}.tmp")
         try:
             if template is None:
-                tmp.write_text(options_text(order, doc, line), encoding="utf-8-sig")
+                tmp.write_text(options_text(order, doc, line, pieces), encoding="utf-8-sig")
             else:
                 shutil.copyfile(template, tmp)
             os.replace(tmp, dest)
@@ -371,7 +399,7 @@ class PrintHubView:
             for order in found:
                 for doc in order.documents:
                     if doc.job and doc.folder.is_dir():
-                        prepare_item(order, doc, self.templates)
+                        prepare_item(order, doc, self.templates, self.rules)
             for order in found:
                 for doc in order.documents:
                     doc.coverage = doc.page_colors = None
@@ -1131,6 +1159,13 @@ class PrintHubView:
             row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
         per_var = tk.StringVar(value=str(before.get("per_sheet") or ""))
         sheets_var = tk.StringVar(value=str(before.get("sheets") or ""))
+        # From the size table, only when nothing was saved for this item yet: what he typed wins.
+        table = pieces_entry(doc, self.rules) if quantity and not before else None
+        table_per = table[1].get(doc.print_paper) if table else None
+        table_hint = f"from the size table ({table[0]} on {doc.print_paper}: {table_per})" if table_per else ""
+        if table_per:
+            per_var.set(str(table_per))
+            sheets_var.set(str(math.ceil(quantity / table_per)))
         paper_var = tk.StringVar(value=before.get("paper_type") or doc.default_paper_type(self.rules) or "")
         sides_var = tk.StringVar(value=SIDE_NAMES[before.get("sides") or doc.default_sides(self.rules)])
 
@@ -1138,6 +1173,11 @@ class PrintHubView:
         if quantity:
             ttk.Label(f, text=f"Pieces ordered: {quantity}.  Pieces per sheet:").grid(row=row, column=0, sticky="w")
             ttk.Entry(f, textvariable=per_var, width=8).grid(row=row, column=1, sticky="w", padx=6)
+            if table_hint:
+                hint = ttk.Label(f, text=table_hint, style="Hint.TLabel")
+                hint.grid(row=row, column=2, sticky="w")
+                per_var.trace_add("write", lambda *_: hint.config(
+                    text=table_hint if per_var.get().strip() == str(table_per) else ""))
             row += 1
         ttk.Label(f, text=f"Sheets (copies of {doc.pdf_name}):").grid(row=row, column=0, sticky="w", pady=4)
         ttk.Entry(f, textvariable=sheets_var, width=8).grid(row=row, column=1, sticky="w", padx=6)

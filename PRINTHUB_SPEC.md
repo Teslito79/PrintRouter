@@ -309,7 +309,7 @@ The website must send these `cut_mm` values when product ordering is built:
 2. **Open PH-10231.cdr** opens the CorelDRAW template copied into the item (picked by size, see above); **Open <file>** opens a customer file in its default program, the same way Windows would on a double click. `Options.txt` in the folder lists what was ordered.
 3. The owner lays out the sheet in `PH-10231.cdr` (e.g. 8 cards per A4 with cut marks) and exports **`PH-10231.pdf`** into the same item folder, next to the untouched customer files.
 4. The app detects `print.pdf`. It counts it as complete only once its size has stopped changing and pdfium can open it. Checks: every page is A4 or A3 (within 1 mm, either orientation); anything else is a problem shown in red. Page count is shown.
-5. **Sheets.** He types the number of sheets, or cards per sheet and the app works it out: 250 cards, 8 per sheet → 32 sheets (rounded up). The sheet number becomes the **copies** of `print.pdf`. If `print.pdf` already holds every sheet as its own page, he enters 1.
+5. **Sheets.** He types the number of sheets, or cards per sheet and the app works it out: 250 cards, 8 per sheet → 32 sheets (rounded up). The sheet number becomes the **copies** of `print.pdf`. If `print.pdf` already holds every sheet as its own page, he enters 1. Pieces per sheet is filled in from the size table below when the size is in it (2026-11-12).
 6. **Ready to print.** Saved in `status.json` under `layout` (sheets, time, page count of `print.pdf`). From here it is printed like a document job: actual size, no n-up, no scaling, no rasterising beyond the existing driver path.
    - Paper size: from the pages of `print.pdf` (A4 / A3).
    - Paper type: from `product_papers`.
@@ -317,6 +317,31 @@ The website must send these `cut_mm` values when product ordering is built:
    - Colour: `color`. Printer: Auto (routing rules in 2.3), staff can override. Tray: `Auto Tray Select` (`Bypass Tray` for hand-fed papers).
 7. An order enters the copier queues only when **all** its product items are Ready to print: then its folder moves from Pending Orders to Orders. Until then it is listed as Waiting for layout. Documents in the same order wait with it, so an order is never split in time.
 8. If `print.pdf` is replaced after Ready to print but before sending, the item goes back to step 4 (check again, sheets kept but shown for confirming). After sending, a changed `print.pdf` is ignored and flagged.
+
+**Pieces per sheet (Tesla, 2026-11-12).** `rules.json` `pieces_per_sheet`, keyed `"<W>x<H>"` in whole mm, each with `A4` and/or `A3`. Lookup: `cut_mm` rounded to whole mm as `WxH`, then `HxW` (as the templates), then the entry for the sheet size of the laid-out PDF. At Layout done, when a number is found and nothing was saved for that item yet, pieces per sheet is filled in, the sheets are worked out (quantity ÷ pieces, rounded up) and a grey hint says "from the size table (85 x 55 on A4: 8)". He can overwrite either field; what he typed is saved and never replaced. No number (booklets, a missing size, or none for that sheet): the fields are empty as before. `Options.txt` adds "Pieces per sheet: 8 on A4, 18 on A3" when the size is in the table.
+
+| Size (mm) | A4 | A3 |
+|---|---|---|
+| 85x55 | 8 | 18 |
+| 90x50 | 10 | 21 |
+| 90x55 | 8 | 18 |
+| 55x55 | 12 | 24 |
+| 100x70 | 4 | 9 |
+| 100x100 | 2 | 6 |
+| 150x55 | 4 | 8 |
+| 210x74 | 2 | 5 |
+| 74x105 (A7) | 8 | 16 |
+| 105x148 (A6) | 4 | 8 |
+| 148x210 (A5) | 2 | 4 |
+| 210x297 (A4) | 1 | 2 |
+| 297x420 (A3) | — | 1 |
+| 99x210 (DL, 1/3 A4) | 2 | 4 |
+| 148x148 | 1 | 2 |
+| 210x210 | — | 1 |
+| 110x220 (envelope DL) | 1 | — |
+| 114x162 (envelope C6) | 1 | — |
+| 162x229 (envelope C5) | 1 | — |
+| 229x324 (envelope C4) | 1 | — |
 
 Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quantity` not a whole number ≥ 1, `options` not label → text, `cut_mm` missing or larger than A3 (297 x 420 mm), a listed file missing or of a type not in the list.
 
