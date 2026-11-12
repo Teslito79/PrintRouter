@@ -199,6 +199,9 @@ class WebsiteSync:
         if not orders._plain_name(folder) or not isinstance(job, dict) or not isinstance(files, list):
             raise SyncError(f"item {folder!r} is incomplete")
         job = dict(job)
+        kind = job.get("kind", "document")
+        if kind not in ("document", "product"):
+            raise SyncError(f"item {folder}: unknown kind {kind!r}")
         path = tmp / folder
         path.mkdir()
         for f in files:
@@ -206,6 +209,36 @@ class WebsiteSync:
             if not orders._plain_name(name):
                 raise SyncError(f"item {folder}: bad file name {name!r}")
             self._fetch(url, path / name)
+        if kind == "product":
+            self._check_product(folder, job, path)
+        else:
+            self._convert_document(folder, job, path)
+        (path / "job.json").write_text(json.dumps(job, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def _check_product(self, folder, job, path):
+        """A product item: the customer's files exactly as uploaded. Never converted, no document.pdf;
+        job.json is written unchanged. The owner lays it out in CorelDRAW (PRINTHUB_SPEC.md 3.4)."""
+        names, titles = job.get("files"), job.get("titles")
+        if not isinstance(names, list) or not 1 <= len(names) <= orders.MAX_PRODUCT_FILES:
+            raise SyncError(f"item {folder}: a product needs 1 to {orders.MAX_PRODUCT_FILES} files")
+        if not isinstance(titles, list) or len(titles) != len(names):
+            raise SyncError(f"item {folder}: files and titles don't match ({len(names)} files, "
+                            f"{len(titles) if isinstance(titles, list) else 'no'} titles)")
+        if len({str(n).lower() for n in names}) != len(names):
+            raise SyncError(f"item {folder}: a file is listed twice")
+        for name in names:
+            reserved = (isinstance(name, str) and (name.lower() in ("job.json", orders.OPTIONS_TXT.lower())
+                                                   or name.upper().startswith("PH-")))
+            if not orders._plain_name(name) or reserved:
+                raise SyncError(f"item {folder}: bad file name {name!r}")
+            if Path(name).suffix.lower() not in orders.PRODUCT_FILES:
+                raise SyncError(f"item {folder}: {name} isn't one of "
+                                f"{', '.join(s[1:] for s in orders.PRODUCT_FILES)}")
+            if not (path / name).is_file():
+                raise SyncError(f"item {folder}: its file {name} wasn't in the download")
+
+    def _convert_document(self, folder, job, path):
+        """A document item: a non-PDF file becomes document.pdf (the original stays next to it)."""
         file = job.get("file")
         if not orders._plain_name(file) or not (path / file).is_file():
             raise SyncError(f"item {folder}: its file {file!r} wasn't in the download")
@@ -221,7 +254,6 @@ class WebsiteSync:
                     why = f"can't convert {file}: Microsoft Office isn't installed on this PC"
                 raise SyncError(f"item {folder}: {why}") from e
             job["file"] = "document.pdf"  # the original stays next to it
-        (path / "job.json").write_text(json.dumps(job, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     # ------------------------------------------------------------ network
 
