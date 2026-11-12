@@ -21,6 +21,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import analyze
+import cleanup
 import convert
 import jobs
 import layout
@@ -72,6 +73,8 @@ class App:
         # Website orders into Pending Orders, while the app is open (only with printhub_token.txt: the work PC).
         self.sync = sync.WebsiteSync(self.rules)
         self.sync.start()
+        # Finished Orders: each order goes to the Recycle Bin 8 days after Ready for courier.
+        cleanup.start(self.rules)
 
         self.items = {}  # id -> Item, in the order they were added
         self.next_id = 1

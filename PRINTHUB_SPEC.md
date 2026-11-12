@@ -322,6 +322,10 @@ Arrival check (Needs attention): unknown `kind`, missing `product`/`name`, `quan
 
 ---
 
+### 3.4b Finished Orders cleanup (2026-11-12)
+
+Each order folder in Finished Orders is deleted on its own **8 days (192 hours) after Ready for courier** (Tesla, 2026-11-12: about 7 days after shipping). `move_finished` writes `finished.txt` (one line, local time ISO, e.g. `2026-11-12T09:23:27`) into the moved folder. `cleanup.py` runs on a background thread at app start and then every hour: every folder directly in Finished Orders whose name starts with `PH-` and whose `finished.txt` is 192 hours old or more goes to the **Recycle Bin** (`SHFileOperationW`, `FOF_ALLOWUNDO`, silent). A `PH-` folder without a readable `finished.txt` gets one with the current time and is never deleted on the same run. Anything else in Finished Orders is left alone; Pending Orders and Orders are never touched. A folder that can't be deleted (a file is open) is tried again at the next run. Deletions and failures go to `cleanup_log.txt` (gitignored).
+
 ### 3.5 Work notes and reports (2026-11-06)
 
 Tests and tasks on the work PC run through the repo's `work\` folder. The planning window (home PC) writes notes into `work\notes\` (and files they need into `work\files\`) and commits only those two folders; they reach the work PC with the `git pull` on every PrintRouter start. At work Tesla opens the **Work PC chat** (Claude Code in `C:\PrintRouter\ADMIN`), types go, and it guides him through the oldest note, writes `work\reports\<note>_report.md`, moves the note to `work\done\` and uploads only `work\` (`git add work`). The planning window reads the report at home. Rules for both chats: `CLAUDE.md` → "Work PC chat".

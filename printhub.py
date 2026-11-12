@@ -36,6 +36,7 @@ from tkinter import messagebox, ttk
 import pypdfium2 as pdfium
 
 import analyze
+import cleanup
 import jobs
 import orders
 import receipt
@@ -836,6 +837,7 @@ class PrintHubView:
                             f"Close its files (CorelDRAW, PDF viewer, the folder in Explorer), then press "
                             f"Move to {self.finished.name}.\n\n{e}", parent=self.win)
             return False
+        cleanup.write_finished(dest)  # the time it is deleted from: 8 days after this (cleanup.py)
         self.status.pop(order.number, None)
         self.orders = [o for o in self.orders if o is not order]
         self.reload()
