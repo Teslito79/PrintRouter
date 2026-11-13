@@ -69,6 +69,8 @@ class App:
         self.prices = routing.load_json("prices.json")
         self.printers = self.rules["printers"]
         self.jobs = jobs.Jobs(self.rules, self.prices)  # routing, checks and sending, shared with PrintHub
+        self.sending_to = set()  # copiers of the batch being sent now: busy for PrintHub's colour choice
+        self.jobs.busy_sources.append(lambda: set(self.sending_to))
         self.printhub = None  # the PrintHub window, once opened
         # Website orders into Pending Orders, while the app is open (only with printhub_token.txt: the work PC).
         self.sync = sync.WebsiteSync(self.rules)
@@ -518,6 +520,7 @@ class App:
             if not messagebox.askyesno("PrintRouter", f"This uses {sheets} sheets in total.\n\nPrint it?"):
                 return
         self.busy = True
+        self.sending_to = {job["printer"] for _, job, *_ in batch}
         for b in (self.add_btn, self.remove_btn, self.select_all_btn, self.clear_btn):
             b.config(state="disabled")
         self.refresh()
@@ -537,7 +540,21 @@ class App:
             label = self.printers[job["printer"]]["label"]
             self.results.put(("progress", f"Sending {n} of {len(batch)}: {job['file_name']} → {label}…"))
             try:
-                self.jobs.print_one(WORK_DIR / str(item_id), job, src, pdf, pdf_paper, rotate_trays)
+                if job.get("hand"):
+                    # Both sides on heavy special paper: fronts, the staff turn the stack, then backs.
+                    self.jobs.print_one(WORK_DIR / str(item_id), job, src, pdf, pdf_paper, rotate_trays,
+                                        side="fronts")
+                    answer = {"event": threading.Event(), "ok": False}
+                    self.results.put(("turn", job["file_name"], label, answer))
+                    answer["event"].wait()
+                    if not answer["ok"]:
+                        failed.append((item_id, job["file_name"], "the fronts were sent, the backs were NOT"))
+                        continue
+                    self.results.put(("progress", f"Sending the backs of {job['file_name']} → {label}…"))
+                    self.jobs.print_one(WORK_DIR / str(item_id), job, src, pdf, pdf_paper, rotate_trays,
+                                        side="backs")
+                else:
+                    self.jobs.print_one(WORK_DIR / str(item_id), job, src, pdf, pdf_paper, rotate_trays)
             except Exception as e:
                 failed.append((item_id, job["file_name"], str(e)))
                 continue
@@ -662,6 +679,14 @@ class App:
                 self.refresh()
         elif kind == "progress":
             self.status.config(text=msg[1])
+        elif kind == "turn":
+            _, name, label, answer = msg
+            answer["ok"] = messagebox.askokcancel(
+                "PrintRouter", f"The fronts of {name} were sent to {label}.\n\n"
+                               f"When they are all out, turn the stack over, put it back in the "
+                               f"Bypass Tray, then click OK to print the backs.\n\n"
+                               f"Cancel: the backs are not printed.")
+            answer["event"].set()
         elif kind == "batch_done":
             self.finish_batch(*msg[1:])
         elif kind == "counter_printed":
@@ -669,6 +694,7 @@ class App:
 
     def finish_batch(self, done, failed, receipt_errors, receipt_mode):
         self.busy = False
+        self.sending_to = set()
         for b in (self.add_btn, self.remove_btn, self.select_all_btn, self.clear_btn):
             b.config(state="normal")
         if receipt_mode == "counter" and done:

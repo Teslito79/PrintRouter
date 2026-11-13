@@ -7,8 +7,8 @@
 ### Printers
 | Key | Queue | Real IP | Notes |
 |---|---|---|---|
-| C4510 | RICOH IM C4510 PCL 6 | 192.168.10.85 | Downstairs. Tray 1-4 + Bypass. Takes Thick 4. Fully tested. |
-| C3000 | RICOH IM C3000 PCL 6_1 | 192.168.10.70 | Upstairs, preferred for colour pictures. Tray 1-2 + Bypass, up to Thick 3. |
+| C4510 | RICOH IM C4510 PCL 6 | 192.168.10.85 | Tray 1-4 + Bypass. Up to 350 gsm. Fully tested. |
+| C3000 | RICOH IM C3000 PCL 6_1 | 192.168.10.70 | First choice for colour. Tray 1-2 + Bypass, up to 300 gsm. |
 | C3004 | RICOH MP C3004 PCL 6 | 192.168.10.14 | Colour documents on plain paper. Tray 1-2 + Bypass. |
 | XP-80C | 80 mm thermal receipt printer | 192.168.10.17 | Receipts only. |
 
@@ -28,13 +28,12 @@ Port **names** in Windows are out of date. Always go by `PrinterHostAddress`. Th
 - `prices.json`: euro prices per side and per paper size, B&W vs. colour, plus a per-sheet extra for special paper. **These are placeholders.**
 
 ### Routing rules when Printer = Auto
-1. Thick 4 -> C4510
-2. B&W -> C4510
-3. Colour document on plain, recycled or thin paper -> C3004
-4. Colour pictures -> C3000
-5. Colour on any other paper -> C3000
+1. B&W -> C4510
+2. Colour document (not a PrintHub product) on plain, recycled or thin paper -> C3004
+3. Any other colour -> C3000, or C4510 when PrintRouter is already using the C3000
 
-If nothing matches, the job goes to C4510.
+If nothing matches, the job goes to C4510. Paper over 300 gsm (website papers) only goes to the C4510.
+Paper that isn't plain always prints from the Bypass Tray; both sides on it at 200 gsm or more (Thick 2 and heavier) is turned by hand: fronts, turn the stack, backs (Tesla, 2026-11-13; PRINTHUB_SPEC.md 2.3).
 
 ### Options in the window
 - **Printer:** radio buttons Auto / C4510 / C3000 / C3004. There is no Content row; document vs. pictures is detected automatically and hidden.

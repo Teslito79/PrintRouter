@@ -40,6 +40,7 @@ import cleanup
 import jobs
 import orders
 import receipt
+import routing
 import theme
 
 WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
@@ -105,7 +106,24 @@ def pieces_line(doc, rules):
     return "Pieces per sheet: " + ", ".join(f"{entry[1][k]} on {k}" for k in ("A4", "A3") if k in entry[1])
 
 
-def options_text(order, doc, template_line=None, pieces=None):
+def tray_lines(doc, rules):
+    """'Tray: Bypass Tray' for paper that isn't plain, and the hand-turned line, from what was ordered
+    (Tesla, 2026-11-13). Empty for plain paper or an unknown paper."""
+    if doc.product:
+        paper_type = doc.default_paper_type(rules)
+        hand = paper_type and doc.default_sides(rules) == orders.HAND
+    else:
+        paper_type = doc.job.get("paper_type")
+        hand = doc.job.get("sides") in ("long", "short") and routing.hand_turned(rules, paper_type)
+    if not paper_type or routing.plain(rules, paper_type):
+        return []
+    lines = [f"Tray: {orders.BYPASS} (the paper isn't plain paper)"]
+    if hand:
+        lines.append("Both sides, turned by hand: fronts first, turn the stack over, then Print backs")
+    return lines
+
+
+def options_text(order, doc, template_line=None, pieces=None, rules=None):
     """Options.txt for an item: what the customer ordered, in plain words."""
     j = doc.job
     when = order.paid_at.strftime("%Y-%m-%d %H:%M") if order.paid_at else "?"
@@ -118,7 +136,7 @@ def options_text(order, doc, template_line=None, pieces=None):
     lines.append("")
     if doc.product:
         lines.append(f"{j.get('name', 'Product')}   quantity {j.get('quantity', '?')}")
-        lines += [f"  {line}" for line in orders.product_lines(doc)]
+        lines += [f"  {line}" for line in orders.product_lines(doc) + tray_lines(doc, rules or {})]
         if template_line:
             lines += ["", template_line]
         if pieces:
@@ -131,7 +149,7 @@ def options_text(order, doc, template_line=None, pieces=None):
         lines += [f"  Copies: {j.get('copies')}", f"  Colour: {j.get('color')}",
                   f"  Sides: {sides.get(j.get('sides'), j.get('sides'))}", f"  Paper: {j.get('paper')}",
                   f"  Pages per side: {j.get('per_side')}", f"  Paper type: {j.get('paper_type')}"]
-        lines += [f"  {line}" for line in orders.document_lines(doc)]
+        lines += [f"  {line}" for line in orders.document_lines(doc) + tray_lines(doc, rules or {})]
     if doc.problems:
         lines += ["", "Problems:"] + [f"  {p}" for p in doc.problems]
     return "\n".join(lines) + "\n"  # written in text mode: Windows line ends are added then
@@ -142,20 +160,6 @@ def hand_job(job):
     job["hand"] = True
     job["sheets"] = job["print_copies"]
     job["pages"] = 1  # each of the two jobs holds one page
-
-
-def one_page(pdf, index, out):
-    """A copy of one page of the PDF (the fronts or the backs of a hand-turned item)."""
-    with jobs.PDF_LOCK:
-        src = pdfium.PdfDocument(str(pdf))
-        dest = pdfium.PdfDocument.new()
-        try:
-            dest.import_pages(src, [index])
-            dest.save(str(out))
-        finally:
-            dest.close()
-            src.close()
-    return out
 
 
 def prepare_item(order, doc, templates, rules=None):
@@ -175,7 +179,7 @@ def prepare_item(order, doc, templates, rules=None):
         tmp = dest.with_name(f".{dest.name}.tmp")
         try:
             if template is None:
-                tmp.write_text(options_text(order, doc, line, pieces), encoding="utf-8-sig")
+                tmp.write_text(options_text(order, doc, line, pieces, rules), encoding="utf-8-sig")
             else:
                 shutil.copyfile(template, tmp)
             os.replace(tmp, dest)
@@ -213,6 +217,9 @@ class PrintHubView:
         self.load_again = False
         self.results = queue.Queue()  # messages from the threads
         self.to_send = queue.Queue()  # parts waiting to be sent, one at a time
+        # A copier taken by an order (sending, sent and not collected yet, waiting for Print backs,
+        # failed or interrupted) is busy: colour goes to the IM C4510 instead of the IM C3000.
+        self.jobs.busy_sources.append(lambda: {pid for pid in self.printers if self.busy_with(pid)})
 
         self.win = tk.Toplevel(root)
         self._build()
@@ -549,10 +556,6 @@ class PrintHubView:
         text = self.jobs.settings_text(settings, job)
         return text.replace(" · Single · ", " · Both sides by hand · ", 1) if job and job.get("hand") else text
 
-    def is_hand(self, order, doc):
-        """A product item laid out as Both sides, turned by hand: fronts and backs are sent apart."""
-        entry = self.layout_of(order, doc) if doc.product else None
-        return bool(entry) and entry["sides"] == orders.HAND
 
     def problems_of(self, order):
         problems = list(order.problems)
@@ -687,7 +690,7 @@ class PrintHubView:
                 part.update(state="failed", error=f"{name}: can't be printed any more")
                 self.save(order.number, f"{name} can't be printed on {printer}")
                 return
-            if self.is_hand(order, docs[name]):
+            if job.get("hand"):
                 # Fronts after the other documents, one hand-turned item at a time; its backs wait
                 # for Print backs (and are never part of this).
                 if hand is None and name not in part.get("fronts", []):
@@ -755,9 +758,8 @@ class PrintHubView:
                 self.results.put(("progress", number, printer, (n, len(tasks))))
                 try:
                     work_dir.mkdir(parents=True, exist_ok=True)
-                    if step:  # fronts = page 1 only, backs = page 2 only, each as its own job
-                        pdf = one_page(pdf, 0 if step == "fronts" else 1, work_dir / f"{step}.pdf")
-                    self.jobs.print_one(work_dir, job, pdf, pdf, job["paper"], None)
+                    # step: fronts = the odd printed sides, backs = the even ones, each as its own job
+                    self.jobs.print_one(work_dir, job, pdf, pdf, job["paper"], None, side=step)
                 except Exception as e:
                     what = f"{name} {step}" if step else name
                     self.results.put(("failed", number, printer, f"{what}: {e}"))
@@ -966,8 +968,8 @@ class PrintHubView:
                 elif state == "turn":
                     name = part.get("turn", "")
                     doc = next((d for d in order.documents if d.name == name), None)
-                    tray = (orders.BYPASS if doc is not None and doc.hand_fed(self.rules) else "tray")
-                    tray = f"the {tray}" if tray == orders.BYPASS else "the tray"
+                    job = self.document_job(order, doc, pid)[1] if doc is not None else None
+                    tray = f"the {orders.BYPASS}" if job and job["tray"] == orders.BYPASS else "the tray"
                     text = (f"{order.number} {name}: fronts sent. When they're out, turn the stack over, "
                             f"put it back in {tray}, then press Print backs.")
                     buttons = [("Print backs", lambda p=pid: self.send_backs(p))]
@@ -1056,8 +1058,9 @@ class PrintHubView:
             lines.append("Last: " + " · ".join(f"{h['time'][11:16]} {h['event']}" for h in history[-3:]))
         if item is not None and item.product:
             lines += [""] + self.product_lines(order, item)
-        elif item is not None and orders.document_lines(item):
-            lines += ["", f"{item.name}  {item.title}"] + [f"    {line}" for line in orders.document_lines(item)]
+        elif item is not None and (orders.document_lines(item) or tray_lines(item, self.rules)):
+            lines += ["", f"{item.name}  {item.title}"] + [
+                f"    {line}" for line in orders.document_lines(item) + tray_lines(item, self.rules)]
         self.details.config(text="\n".join(lines))
 
     # -------------------------------------------------------- product items
@@ -1097,6 +1100,11 @@ class PrintHubView:
             lines.append(f"    Layout done {entry.get('time', '')[:16]}: {_count(entry['sheets'], 'sheet')}"
                          + (f" ({entry['per_sheet']} per sheet)" if entry.get("per_sheet") else "")
                          + f", {receipt.short_paper_type(entry['paper_type'])}, {SIDE_NAMES[entry['sides']]}")
+            job = self.document_job(order, doc)[1]
+            if job:
+                lines.append(f"    Tray: {job['tray']}" + (", both sides turned by hand" if job.get("hand") else ""))
+        else:
+            lines += [f"    {line}" for line in tray_lines(doc, self.rules)]
         return lines
 
     def refresh_item_bar(self):

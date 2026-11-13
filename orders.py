@@ -84,23 +84,26 @@ class Document:
     def product_settings(self, sheets, paper_type, sides, rules):
         """print.pdf as the main window's per-file settings: as it is, `sheets` copies, in colour.
         sides 'hand' (both sides, stack turned over by hand) is one-sided for the copier: fronts and
-        backs are sent as separate jobs. Hand-fed papers go to the Bypass Tray."""
+        backs are sent as separate jobs. jobs.job_for picks the Bypass Tray for paper that isn't plain,
+        and the copier from the paper's gsm (rules.json printers max_gsm)."""
         return {"color": "color", "printer": "auto", "sides": "single" if sides == HAND else sides,
                 "paper": self.print_paper, "per_side": "1", "paper_type": paper_type,
-                "tray": BYPASS if self.hand_fed(rules) else TRAY, "copies": str(sheets), "rotate": "0"}
+                "tray": TRAY, "copies": str(sheets), "rotate": "0", "product": True, "gsm": self.gsm()}
+
+    def gsm(self):
+        """The weight of the customer's paper, from its name ('Silk 250 gsm' -> 250), or None."""
+        return routing.paper_gsm(self.job.get("options", {}).get("Paper"))
 
     def default_paper_type(self, rules):
         """The driver paper type for the customer's Paper choice (rules.json product_papers), or None."""
         return rules.get("product_papers", {}).get(self.job.get("options", {}).get("Paper"))
 
-    def hand_fed(self, rules):
-        """True when the customer's paper is loaded by hand in the Bypass Tray (rules.json hand_fed_papers)."""
-        return self.job.get("options", {}).get("Paper") in rules.get("hand_fed_papers", {}).get("papers", [])
-
-    def default_sides(self, rules):
+    def default_sides(self, rules, paper_type=None):
+        """single, long, or HAND: both sides on paper that isn't plain and 200 gsm or more (Tesla, 2026-11-13)."""
         if self.job.get("options", {}).get("Sides") not in DOUBLE_SIDED:
             return "single"
-        return HAND if self.hand_fed(rules) else "long"
+        paper_type = paper_type or self.default_paper_type(rules)
+        return HAND if paper_type and routing.hand_turned(rules, paper_type, self.gsm()) else "long"
 
     def settings(self):
         """The job as the main window's per-file settings (app.OPTIONS), printer chosen by the rules."""

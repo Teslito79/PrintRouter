@@ -99,9 +99,9 @@ STEP 3 - PrintHub paper test
       If any other order is red, write down what its Status column says.
       (These are printer-driver complaints that could not be checked at home.)
   3c. Press "Start printing orders". Expected:
-        C4510 (downstairs) -> PH-1001 (Letter, 4 pages double-sided, 2 copies)
+        C4510            -> PH-1001 (Letter, 4 pages double-sided, 2 copies)
         MP C3004           -> PH-1002 document 02 (Report charts, colour)
-        IM C3000 (upstairs)-> PH-1002 document 03 (Photos, Coated Glossy paper)
+        IM C3000          -> PH-1002 document 03 (Photos, Coated Glossy paper)
       Every page has a label at the top like "PH-1002 / 01 / Report text.pdf / page 3".
   3d. Check each stack, then press "Pages collected" on that copier's panel.
       The next order for that copier should start by itself, e.g.:
@@ -126,7 +126,7 @@ STEP 5 - Write down the results
 
 HAND-FED THICK PAPER TEST (350 gsm, turned by hand) - added 2026-11-05
   Needs: a few A4 sheets of Smooth white 350 gsm, PrintRouter updated.
-  1. Load the 350 gsm sheets in the Bypass Tray of the IM C4510 (downstairs).
+  1. Load the 350 gsm sheets in the Bypass Tray of the IM C4510.
   2. PrintHub: press "Add sample orders". PH-1015 (Business cards x 250, Smooth
      white 350 gsm, both sides) appears in Pending Orders.
   3. Open its folder (click PH-1015, "Open folder") and rename

@@ -20,12 +20,46 @@ PDF_LOCK = threading.RLock()
 MAX_COPIES = 999  # per print job (the copiers' limit); more copies are sent as several jobs
 
 
+def sides_pdf(pdf, side, out):
+    """The fronts (pages 1, 3, 5, ...) or the backs (pages 2, 4, 6, ...) of a laid-out PDF, for printing
+    both sides by hand. With an odd page count the backs end with a blank page, so every front
+    has its back. Call under PDF_LOCK."""
+    import pypdfium2 as pdfium
+    src = pdfium.PdfDocument(str(pdf))
+    dest = pdfium.PdfDocument.new()
+    try:
+        count = len(src)
+        indexes = list(range(0 if side == "fronts" else 1, count, 2))
+        if indexes:
+            dest.import_pages(src, indexes)
+        if side == "backs" and count % 2:
+            w, h = src[count - 1].get_size()
+            dest.new_page(w, h)
+        dest.save(str(out))
+    finally:
+        dest.close()
+        src.close()
+    return out
+
+
 class Jobs:
     def __init__(self, rules, prices):
         self.rules = rules
         self.prices = prices
         self.printers = rules["printers"]
         self.printer_options = self._read_printer_options()
+        # Functions giving the copiers PrintRouter is using right now (the PrintHub view, the main
+        # window's batch being sent); a colour job then goes to the rule's if_busy copier.
+        self.busy_sources = []
+
+    def busy(self):
+        found = set()
+        for source in self.busy_sources:
+            try:
+                found |= set(source())
+            except Exception:
+                pass
+        return found
 
     def _read_printer_options(self):
         """Paper types and trays each printer's driver offers: {printer id: {feature: set}}."""
@@ -67,11 +101,13 @@ class Jobs:
 
     # ------------------------------------------------------------- the jobs
 
-    def job_for(self, name, settings, pages, coverage, page_colors, max_copies=MAX_COPIES):
+    def job_for(self, name, settings, pages, coverage, page_colors, max_copies=MAX_COPIES, busy=None):
         """The print job for one converted file, or None if its settings can't print yet.
 
         settings: the per-file options (app.OPTIONS); coverage and page_colors come from analyze.
+        PrintHub products add "product": True and "gsm" (from the website paper name).
         max_copies: above MAX_COPIES (PrintHub products), print_one sends several jobs.
+        busy: copiers in use now (default: ask busy_sources); the choice is made again when sent.
         """
         s = settings
         if s["printer"] != "auto" and s["printer"] not in self.printers:
@@ -103,14 +139,23 @@ class Jobs:
             "paper_type": s["paper_type"],
             "tray": s["tray"],
             "rotate": s["rotate"] == "1",
+            "product": bool(s.get("product")),
+            "gsm": s.get("gsm"),
         }
         if job["mixed"]:
             job["color_units"] = color_units
+        if not routing.plain(self.rules, job["paper_type"]):
+            job["tray"] = routing.BYPASS  # Tesla, 2026-11-13: special paper always from the bypass
+            if job["duplex"] and routing.hand_turned(self.rules, job["paper_type"], job["gsm"]):
+                # Both sides, turned by hand: fronts and backs are sent as two one-sided jobs
+                # (print_one with side=...); duplex stays True so sheets and prices count both sides.
+                job["hand"] = True
         if s["printer"] == "auto":
             # Color with many pictures goes elsewhere than color documents (see rules.json).
             job["content"] = (routing.resolve_content(self.rules, "auto", coverage)
                               if job["color"] else "document")
-            printer_id, reason = routing.choose_printer(self.rules, job)
+            printer_id, reason = routing.choose_printer(self.rules, job,
+                                                        self.busy() if busy is None else busy)
             if job["rotate"]:
                 printer_id, reason = self.rules["rotate_sort"]["printer"], "Rotate sort"
         else:
@@ -122,9 +167,16 @@ class Jobs:
         if job["paper"] == "A5" and job["per_side"] > 1:
             job["problem"] = "A5 is already 2 on A4: set Pages per side to 1"
         else:
-            job["problem"] = (self.rotate_problem(printer_id, job) or self.missing_options(printer_id, job)
-                              or self.refused(printer_id, job))
+            job["problem"] = (self.rotate_problem(printer_id, job) or self.weight_problem(printer_id, job)
+                              or self.missing_options(printer_id, job) or self.refused(printer_id, job))
         return job
+
+    def weight_problem(self, printer_id, job):
+        """Text when the paper is heavier than this copier takes (rules.json printers max_gsm), or None."""
+        limit = routing.max_gsm(self.rules, printer_id)
+        if job["gsm"] and limit and job["gsm"] > limit:
+            return f"{self.printers[printer_id]['label']} takes up to {limit} gsm, this is {job['gsm']} gsm"
+        return None
 
     def rotate_problem(self, printer_id, job):
         """Text saying why rotate sort can't be used for this job, or None."""
@@ -135,6 +187,8 @@ class Jobs:
             return f"Rotate sort only on {self.printers[rs['printer']]['label']}"
         if job["paper"] != "A4":
             return "Rotate sort is for A4 only"
+        if not routing.plain(self.rules, job["paper_type"]):
+            return "Rotate sort is for plain paper (other paper prints from the Bypass Tray)"
         if job["tray"] != self.rules["defaults"]["tray"]:
             return f"Rotate sort uses {' and '.join(rs['trays'])}: set Tray to {self.rules['defaults']['tray']}"
         return None
@@ -148,8 +202,10 @@ class Jobs:
         refused = []
         try:
             for tray in trays:
+                # A hand-turned job is sent as two one-sided jobs: the driver never sees duplex.
                 for r in driverprint.refused_settings(self.printers[printer_id]["queue"], paper, job["color"],
-                                                      job["duplex"], job["paper_type"], tray):
+                                                      job["duplex"] and not job.get("hand"), job["paper_type"],
+                                                      tray):
                     if r not in refused:
                         refused.append(r)
         except Exception:
@@ -161,14 +217,15 @@ class Jobs:
         mode = receipt.color_text(job) if job else {"bw": "B&W", "color": "Color", "auto": "Auto color"}[s["color"]]
         if s["color"] == "auto" and job and not job["mixed"]:
             mode += " (auto)"
-        parts = [mode, receipt.SIDES[s["sides"]],
+        parts = [mode, "Both sides by hand" if job and job.get("hand") else receipt.SIDES[s["sides"]],
                  "A5 (2 on A4)" if s["paper"] == "A5" else s["paper"]]
         if s["per_side"] != "1":
             parts.append(f"{s['per_side']} per side")
         if s["paper_type"] != receipt.DEFAULT_PAPER_TYPE:
             parts.append(receipt.short_paper_type(s["paper_type"]))
-        if s["tray"] != receipt.DEFAULT_TRAY:
-            parts.append(s["tray"])
+        tray = job["tray"] if job else s["tray"]
+        if tray != receipt.DEFAULT_TRAY:
+            parts.append(tray)
         parts.append(f"× {s['copies']}")
         if s["rotate"] == "1":
             parts.append("Rotate sort")
@@ -176,11 +233,13 @@ class Jobs:
 
     # ------------------------------------------------------------- printing
 
-    def print_one(self, work_dir, job, src, pdf, pdf_paper, rotate_trays):
+    def print_one(self, work_dir, job, src, pdf, pdf_paper, rotate_trays, side=None):
         """Lay out and send one file. work_dir: this file's own temp folder.
 
         rotate_trays: endless iterator over the rotate sort trays, shared by the whole batch,
-        so the stacks keep alternating from one file to the next."""
+        so the stacks keep alternating from one file to the next.
+        side: 'fronts' or 'backs' of a hand-turned job (job["hand"]): after the layout, only the odd
+        or the even printed sides are sent, one-sided."""
         with PDF_LOCK:
             if convert.needs_paper(src) and pdf_paper != job["paper"]:
                 pdf = work_dir / f"document_{job['paper']}.pdf"
@@ -196,6 +255,9 @@ class Jobs:
                 combined = work_dir / f"{job['per_side']}_per_side.pdf"
                 layout.n_up(pdf, combined, job["per_side"], job["paper"])
                 pdf = combined
+            if side:
+                pdf = sides_pdf(pdf, side, work_dir / f"{side}.pdf")
+                job = dict(job, duplex=False)  # each half is printed one-sided; the stack is turned by hand
             queue_name = self.printers[job["printer"]]["queue"]
             if job["rotate"]:
                 # Each copy is its own job, taking turns between the trays (portrait / landscape

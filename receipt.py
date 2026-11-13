@@ -187,5 +187,5 @@ if __name__ == "__main__":
     }
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else here / "test_results" / "sample_receipt.pdf"
     out.parent.mkdir(parents=True, exist_ok=True)
-    total = make_receipt_pdf(out, prices, [(sample, "IM C3000 (upstairs)")])
+    total = make_receipt_pdf(out, prices, [(sample, "IM C3000")])
     print(f"Receipt saved: {out}  total {fmt(prices, total)}")
