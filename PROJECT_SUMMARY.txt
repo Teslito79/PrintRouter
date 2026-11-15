@@ -14,8 +14,14 @@
 
 Port **names** in Windows are out of date. Always go by `PrinterHostAddress`. The PC runs NordVPN (NordLynx) and LAN printing works with it on.
 
+### Main menu (2026-11-15)
+PrintRouter opens on a main menu (`mainmenu.py`) with four buttons: **Walk-in** (the window below), **PrintHub** (website orders), **Counter** and **Prices**. Only one window shows at a time; every screen has **Back** (its X does the same) and closing the menu closes PrintRouter. Walk-in and PrintHub are only hidden, so files, orders and a waiting "turn the stack" stay; Back is disabled while something is being sent. The website sync and the finished-order cleanup run from start, the menu shows the sync line.
+- **Counter** (`counter.py`): what PrintRouter sent in a date range (Today, Yesterday, This week Monday-Sunday, This month, This year, or from-to), as Total, Walk-in and PrintHub: printed sides (copies) by A3/A4 and colour/B&W with sheets, By paper, and for PrintHub orders printed and By product; each with its cost from Prices. Reads `print_log.csv`, old lines too; Open in Excel opens it. Photocopies made at the copier are not counted.
+- **Prices** (`costs.py`): what printing costs the shop (not the selling prices in `prices.json`): cost of a copy (one printed side, A4/A3, B&W/colour), each paper's extra cost per sheet (A4/A3), other consumables. Cost of a job = sides x copy cost + sheets x paper extra. Saved in `costs.json`. Behind a password, chosen the first time Prices is opened; only a salted hash is kept, in `prices_password.json`. **Forgotten password: delete `prices_password.json` next to `app.py`; the next open asks for a new one** (the costs stay). Both files are local, not on GitHub.
+- `print_log.csv` columns since 2026-11-15, after the first fourteen: source (walk-in / printhub), order, product, quantity, sheet size, color sides, bw sides, paper name. One line per job sent (a hand-turned job once, with both sides).
+
 ### Files
-- `app.py`: Tkinter window. Handles a batch of several files; the options apply to whichever files are selected in the list. Watches `Inbox\` every 2 s (subfolders too) and moves printed files to `Printed\<date>\`. Writes `print_log.csv`.
+- `app.py`: Tkinter window. Handles a batch of several files; the options apply to whichever files are selected in the list. Watches `Inbox\` every 2 s (subfolders too) and moves printed files to `Printed\<date>\`. Writes `print_log.csv`. It is the Walk-in screen; `app.py` starts the main menu.
 - `convert.py`: turns files into PDF. Images go through Pillow (fitted to the page and rotated to match). Word, Excel and PowerPoint go through MS Office via pywin32 (password-protected files fail fast).
 - `analyze.py`: page count plus colour coverage per page, from a 36 dpi pdfium render. Used by Auto to decide document vs. pictures (threshold 15%).
 - `routing.py`: loads `rules.json` and `prices.json`. The first matching rule picks the printer.

@@ -191,7 +191,8 @@ def prepare_item(order, doc, templates, rules=None):
 
 
 class PrintHubView:
-    def __init__(self, root, rules, shared_jobs, website=None):
+    def __init__(self, root, rules, shared_jobs, website=None, on_back=None):
+        self.on_back = on_back  # shows the main menu again (None in tests: the window just hides)
         self.rules = rules
         self.jobs = shared_jobs
         self.website = website  # sync.WebsiteSync, started by the main window (None in tests)
@@ -224,8 +225,8 @@ class PrintHubView:
         self.win = tk.Toplevel(root)
         self._build()
         theme.dark_title_bar(self.win)
-        # Closing only hides the window: sending and the order progress carry on.
-        self.win.protocol("WM_DELETE_WINDOW", self.win.withdraw)
+        # Closing only hides the window (back to the menu): sending and the order progress carry on.
+        self.win.protocol("WM_DELETE_WINDOW", self.back)
         threading.Thread(target=self._send_worker, daemon=True).start()
         self.reload()
         self.win.after(100, self.poll)
@@ -248,6 +249,8 @@ class PrintHubView:
 
         top = ttk.Frame(f)
         top.grid(row=0, column=0, sticky="we", pady=(0, 8))
+        self.back_btn = ttk.Button(top, text="← Back", command=self.back)
+        self.back_btn.pack(side="left", padx=(0, 24))
         ttk.Button(top, text="Reload", command=self.press_reload).pack(side="left")
         for folder in (self.pending, self.folder, self.finished):
             ttk.Button(top, text=f"Open {folder.name}", command=lambda d=folder: self.open_path(d)).pack(
@@ -328,6 +331,15 @@ class PrintHubView:
             return bool(self.win.winfo_exists())
         except tk.TclError:
             return False
+
+    def back(self):
+        """Back (or the window's X): hide and show the main menu. Not while a part is being sent."""
+        if self.sending():
+            self.win.bell()
+            return
+        self.win.withdraw()
+        if self.on_back is not None:
+            self.on_back()
 
     def show(self):
         self.win.deiconify()
@@ -698,6 +710,7 @@ class PrintHubView:
                 continue
             # The order number in the name shows in the copier's queue and in print_log.csv.
             job["file_name"] = f"{order.number} {name} {docs[name].title}"
+            job["log_info"] = self.log_info(order, docs[name])
             tasks.append((name, job, docs[name].pdf, WORK_DIR / order.number / name, None))
         if hand:
             name, job = hand
@@ -731,6 +744,8 @@ class PrintHubView:
             self.refresh()
             return
         job["file_name"] = f"{order.number} {name} {doc.title} backs"
+        # One print_log.csv line for the whole hand-turned item, written when the backs are out.
+        job["log_info"] = dict(self.log_info(order, doc), file=f"{order.number} {name} {doc.title}")
         self.start_batch(order, printer, [(name, job, doc.pdf, WORK_DIR / order.number / name, "backs")],
                          f"{name} sending backs to {printer}")
         self.refresh()
@@ -764,7 +779,8 @@ class PrintHubView:
                     what = f"{name} {step}" if step else name
                     self.results.put(("failed", number, printer, f"{what}: {e}"))
                     break
-                self.jobs.log(job, self.printers[printer]["label"])
+                if step != "fronts":  # a hand-turned item is logged once, with its backs
+                    self.jobs.log(job, self.printers[printer]["label"])
                 self.results.put(("step_sent", number, printer, name, step) if step
                                  else ("doc_sent", number, printer, name))
             else:
@@ -879,6 +895,16 @@ class PrintHubView:
         self.fill()
         self.refresh_printers()
         self.refresh_steps()
+        self.back_btn.config(state="disabled" if self.sending() else "normal")
+
+    def log_info(self, order, doc):
+        """The print_log.csv columns that say what a PrintHub job was (jobs.Jobs.log)."""
+        if doc.product:
+            return {"source": "printhub", "order": order.number, "product": doc.job.get("name") or "Product",
+                    "quantity": doc.job.get("quantity") if orders._whole(doc.job.get("quantity")) else "",
+                    "paper_name": doc.job.get("options", {}).get("Paper") or ""}
+        return {"source": "printhub", "order": order.number, "product": "Document", "quantity": "",
+                "paper_name": ""}
 
     def order_text(self, order):
         """The order's status column."""

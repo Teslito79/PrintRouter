@@ -63,15 +63,16 @@ class Item:
 
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, on_back=None):
+        """root: the walk-in window (a Toplevel under the main menu). on_back: shows the menu again."""
         self.root = root
+        self.on_back = on_back
         self.rules = routing.load_json("rules.json")
         self.prices = routing.load_json("prices.json")
         self.printers = self.rules["printers"]
         self.jobs = jobs.Jobs(self.rules, self.prices)  # routing, checks and sending, shared with PrintHub
         self.sending_to = set()  # copiers of the batch being sent now: busy for PrintHub's colour choice
         self.jobs.busy_sources.append(lambda: set(self.sending_to))
-        self.printhub = None  # the PrintHub window, once opened
         # Website orders into Pending Orders, while the app is open (only with printhub_token.txt: the work PC).
         self.sync = sync.WebsiteSync(self.rules)
         self.sync.start()
@@ -113,7 +114,7 @@ class App:
 
     def _build(self):
         root = self.root
-        root.title("PrintRouter")
+        root.title("PrintRouter: Walk-in")
         style = ttk.Style()
         theme.apply(root)
         style.configure(".", font=FONT)
@@ -137,6 +138,8 @@ class App:
         # File list
         top = ttk.Frame(f)
         top.grid(row=0, column=0, sticky="we", pady=(0, 6))
+        self.back_btn = ttk.Button(top, text="← Back", command=self.on_close)
+        self.back_btn.pack(side="left", padx=(0, 24))
         self.add_btn = ttk.Button(top, text="Add files…", command=self.add_files)
         self.add_btn.pack(side="left")
         self.remove_btn = ttk.Button(top, text="Remove selected", command=self.remove_selected)
@@ -147,7 +150,6 @@ class App:
             side="left", padx=(8, 0))
         self.clear_btn = ttk.Button(top, text="Start over", command=self.clear)
         self.clear_btn.pack(side="right")
-        ttk.Button(top, text="PrintHub", command=self.open_printhub).pack(side="right", padx=(0, 24))
 
         list_box = ttk.Frame(f)
         list_box.grid(row=1, column=0, sticky="nsew")
@@ -305,12 +307,6 @@ class App:
             item.settings[name] = value
         self.refresh()
 
-    def open_printhub(self):
-        if self.printhub and self.printhub.is_open():
-            self.printhub.show()
-        else:
-            self.printhub = printhub.PrintHubView(self.root, self.rules, self.jobs, self.sync)
-
     # ------------------------------------------------------------- the jobs
 
     def job_for(self, item):
@@ -391,12 +387,12 @@ class App:
     # -------------------------------------------------------- adding files
 
     def add_files(self):
-        paths = filedialog.askopenfilenames(title="Choose files to print", filetypes=FILE_TYPES)
+        paths = filedialog.askopenfilenames(parent=self.root, title="Choose files to print", filetypes=FILE_TYPES)
         if not paths:
             return
         bad = [Path(p).name for p in paths if Path(p).suffix.lower() not in convert.SUPPORTED_EXT]
         if bad:
-            messagebox.showwarning("PrintRouter", "These files can't be printed and were skipped:\n\n"
+            messagebox.showwarning(parent=self.root, title="PrintRouter", message="These files can't be printed and were skipped:\n\n"
                                    + "\n".join(bad) + "\n\nSupported: PDF, Word, Excel, PowerPoint, PNG, JPG.")
         for p in paths:
             if Path(p).suffix.lower() in convert.SUPPORTED_EXT:
@@ -517,11 +513,11 @@ class App:
         sheets = sum(job["sheets"] for _, job, *_ in batch)
         limit = self.rules.get("confirm_above_sheets", 0)
         if limit and sheets > limit:
-            if not messagebox.askyesno("PrintRouter", f"This uses {sheets} sheets in total.\n\nPrint it?"):
+            if not messagebox.askyesno(parent=self.root, title="PrintRouter", message=f"This uses {sheets} sheets in total.\n\nPrint it?"):
                 return
         self.busy = True
         self.sending_to = {job["printer"] for _, job, *_ in batch}
-        for b in (self.add_btn, self.remove_btn, self.select_all_btn, self.clear_btn):
+        for b in (self.back_btn, self.add_btn, self.remove_btn, self.select_all_btn, self.clear_btn):
             b.config(state="disabled")
         self.refresh()
         self.refresh_counter()
@@ -626,7 +622,7 @@ class App:
         if error:
             self.refresh_counter()
             self.status.config(text="")
-            messagebox.showwarning("PrintRouter", f"The counter receipt did not print; the counter is kept.\n\n{error}")
+            messagebox.showwarning(parent=self.root, title="PrintRouter", message=f"The counter receipt did not print; the counter is kept.\n\n{error}")
             return
         total = self.counter_total()
         del self.counter[:runs]  # only what was on the receipt
@@ -635,13 +631,13 @@ class App:
         try:
             self._save_counter()
         except OSError as e:
-            messagebox.showwarning("PrintRouter", f"The receipt printed, but the counter file could not be "
+            messagebox.showwarning(parent=self.root, title="PrintRouter", message=f"The receipt printed, but the counter file could not be "
                                                   f"updated, so it may come back after a restart.\n\n{e}")
 
     def clear_counter(self):
         if not self.counter or self.counter_printing:
             return
-        if not messagebox.askyesno("PrintRouter", f"Clear the counter ({receipt.fmt(self.prices, self.counter_total())}) "
+        if not messagebox.askyesno(parent=self.root, title="PrintRouter", message=f"Clear the counter ({receipt.fmt(self.prices, self.counter_total())}) "
                                                   f"without printing a receipt?"):
             return
         self.counter = []
@@ -649,7 +645,7 @@ class App:
         try:
             self._save_counter()
         except OSError as e:
-            messagebox.showwarning("PrintRouter", f"The counter file could not be updated.\n\n{e}")
+            messagebox.showwarning(parent=self.root, title="PrintRouter", message=f"The counter file could not be updated.\n\n{e}")
 
     # ------------------------------------------------- results from workers
 
@@ -682,7 +678,7 @@ class App:
         elif kind == "turn":
             _, name, label, answer = msg
             answer["ok"] = messagebox.askokcancel(
-                "PrintRouter", f"The fronts of {name} were sent to {label}.\n\n"
+                parent=self.root, title="PrintRouter", message=f"The fronts of {name} were sent to {label}.\n\n"
                                f"When they are all out, turn the stack over, put it back in the "
                                f"Bypass Tray, then click OK to print the backs.\n\n"
                                f"Cancel: the backs are not printed.")
@@ -695,7 +691,7 @@ class App:
     def finish_batch(self, done, failed, receipt_errors, receipt_mode):
         self.busy = False
         self.sending_to = set()
-        for b in (self.add_btn, self.remove_btn, self.select_all_btn, self.clear_btn):
+        for b in (self.back_btn, self.add_btn, self.remove_btn, self.select_all_btn, self.clear_btn):
             b.config(state="normal")
         if receipt_mode == "counter" and done:
             self.counter.append({"time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -744,15 +740,17 @@ class App:
             lines.append("\nThe receipt did not print:")
             lines += [f"    • {e}" for e in receipt_errors]
         show = messagebox.showwarning if failed or receipt_errors else messagebox.showinfo
-        show("PrintRouter", "\n".join(lines))
+        show(parent=self.root, title="PrintRouter", message="\n".join(lines))
 
     def on_close(self):
-        if self.busy and not messagebox.askyesno("PrintRouter", "Files are still being sent. Close anyway?"):
+        """Back (or the window's X): to the main menu. Not while files are being sent."""
+        if self.busy:
+            self.root.bell()
             return
-        if (self.printhub and self.printhub.sending()
-                and not messagebox.askyesno("PrintRouter", "PrintHub orders are still being sent. Close anyway?")):
-            return
-        self.root.destroy()
+        if self.on_back is not None:
+            self.on_back()
+        else:
+            self.root.destroy()
 
 
 def main():
@@ -774,8 +772,9 @@ def main():
         root.withdraw()
         messagebox.showerror("PrintRouter", "There is a problem in rules.json:\n\n" + "\n".join(problems))
         return
-    App(root)
-    theme.dark_title_bar(root)
+    import mainmenu
+    root.withdraw()  # the hidden Tk root: the main menu and every screen are their own windows
+    mainmenu.MainMenu(root, App)
     root.mainloop()
     # Let PDF work in progress finish first: pdfium crashes if Python shuts down under it.
     jobs.PDF_LOCK.acquire()

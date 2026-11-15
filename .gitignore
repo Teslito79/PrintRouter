@@ -20,3 +20,8 @@ sync_log.txt
 sync_outbox.json
 .sync_outbox.json.tmp
 cleanup_log.txt
+costs.json
+.costs.json.tmp
+prices_password.json
+.prices_password.json.tmp
+print_log.csv.tmp

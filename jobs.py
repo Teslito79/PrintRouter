@@ -5,6 +5,8 @@ and print in exactly the same way.
 """
 import csv
 import datetime
+import math
+import os
 import threading
 
 import analyze
@@ -18,6 +20,55 @@ import routing
 # (converting, analysing, laying out pages, printing).
 PDF_LOCK = threading.RLock()
 MAX_COPIES = 999  # per print job (the copiers' limit); more copies are sent as several jobs
+
+
+LOG_FILE = "print_log.csv"
+# print_log.csv columns. The last eight were added on 2026-11-15 (Counter screen); older lines
+# have only the first fourteen and are still read (counter.py).
+LOG_COLUMNS = ["time", "file", "pages", "copies", "color", "sides", "paper", "paper type", "tray", "content",
+               "printer", "reason", "sheets", "price",
+               "source", "order", "product", "quantity", "sheet size", "color sides", "bw sides", "paper name"]
+
+
+def sheet_size(paper):
+    """The sheet that goes through the copier: A5 is printed 2-up on A4."""
+    return "A4" if paper == "A5" else paper
+
+
+def printed_sides(job, rules):
+    """(colour sides, B&W sides) the copier prints for a job, copies included."""
+    if job.get("hand") and not job["duplex"]:
+        total = 2 * job["sheets"]  # a hand-turned product: page 1 on the fronts, page 2 on the backs
+    elif job["paper"] == "A5":
+        per_run = job["pages"] if rules.get("a5_layout") == "same_page_twice" else math.ceil(job["pages"] / 2)
+        total = per_run * job["print_copies"]  # A4 sides holding the A5 pages
+    else:
+        total = layout.printed_sides(job["pages"], job["per_side"]) * job["copies"]
+    if job.get("mixed"):
+        # color_units: colour sides per copy (A5: colour A5 pages, spread over the A4 sides)
+        per_copy = (layout.printed_sides(job["pages"], job["per_side"]) if job["paper"] != "A5"
+                    else job["pages"])
+        color = round(total * job["color_units"] / per_copy) if per_copy else 0
+        return color, total - color
+    return (total, 0) if job["color"] else (0, total)
+
+
+def _upgrade_header(path):
+    """An old print_log.csv gets the new column names in its first line; every line is kept."""
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            first = next(csv.reader(f), None)
+    except OSError:
+        return
+    if not first or first[0] != "time" or len(first) >= len(LOG_COLUMNS):
+        return
+    text = path.read_text(encoding="utf-8-sig")
+    rest = text.split("\n", 1)[1] if "\n" in text else ""
+    tmp = path.with_suffix(".csv.tmp")
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        csv.writer(f).writerow(LOG_COLUMNS)
+        f.write(rest)
+    os.replace(tmp, path)
 
 
 def sides_pdf(pdf, side, out):
@@ -292,19 +343,27 @@ class Jobs:
                               actual_size=job.get("actual_size", False))
 
     def log(self, job, printer_label):
-        path = routing.app_dir() / "print_log.csv"
+        """One line in print_log.csv per job sent (a hand-turned job once, with both sides).
+        job["log_info"] (PrintHub): source, order, product, quantity, paper_name, file."""
+        path = routing.app_dir() / LOG_FILE
+        info = job.get("log_info") or {}
         try:
+            color_sides, bw_sides = printed_sides(job, self.rules)
+            row = [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), info.get("file", job["file_name"]),
+                   job["pages"], job["copies"],
+                   "mixed" if job["mixed"] else "color" if job["color"] else "bw",
+                   receipt.SIDES[job["flip"]].lower(), job["paper"], job["paper_type"],
+                   job["tray"], job["content"], printer_label,
+                   job["reason"], job["sheets"], f"{receipt.total_price(self.prices, job):.2f}",
+                   info.get("source", "walk-in"), info.get("order", ""), info.get("product", ""),
+                   info.get("quantity", ""), sheet_size(job["paper"]), color_sides, bw_sides,
+                   info.get("paper_name", "")]
+            _upgrade_header(path)
             new = not path.exists()
             with open(path, "a", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
                 if new:
-                    w.writerow(["time", "file", "pages", "copies", "color", "sides", "paper", "paper type",
-                                "tray", "content", "printer", "reason", "sheets", "price"])
-                w.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), job["file_name"],
-                            job["pages"], job["copies"],
-                            "mixed" if job["mixed"] else "color" if job["color"] else "bw",
-                            receipt.SIDES[job["flip"]].lower(), job["paper"], job["paper_type"],
-                            job["tray"], job["content"], printer_label,
-                            job["reason"], job["sheets"], f"{receipt.total_price(self.prices, job):.2f}"])
-        except OSError:
+                    w.writerow(LOG_COLUMNS)
+                w.writerow(row)
+        except Exception:
             pass  # the log must never stop a print
