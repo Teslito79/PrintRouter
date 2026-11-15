@@ -25,3 +25,5 @@ costs.json
 prices_password.json
 .prices_password.json.tmp
 print_log.csv.tmp
+counter_export.json
+.counter_export.json.tmp

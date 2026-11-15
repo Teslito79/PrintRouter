@@ -6,10 +6,11 @@ the Prices screen (costs.py). Read-only: a broken line is skipped.
 """
 import csv
 import datetime
+import json
 
 import os
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import costs
 import jobs
@@ -17,6 +18,29 @@ import routing
 import theme
 
 SIZES = ("A3", "A4")
+SETTINGS_FILE = "counter_export.json"  # the two Export PDF tick boxes (local, not on GitHub)
+
+
+def load_settings():
+    out = {"include_costs": True, "include_jobs": True}
+    try:
+        saved = json.loads((routing.app_dir() / SETTINGS_FILE).read_text(encoding="utf-8"))
+        out.update({k: bool(saved[k]) for k in out if k in saved})
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return out
+
+
+def documents_dir():
+    """The user's Documents folder (also when Windows moved it, e.g. to OneDrive)."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and os.path.isdir(buf.value):
+            return buf.value  # CSIDL_PERSONAL
+    except Exception:
+        pass
+    return os.path.expanduser("~")
 
 
 # ------------------------------------------------------------------ reading the log
@@ -50,7 +74,7 @@ def parse_row(row):
         cs, bs = (0, total) if color == "bw" else (total, 0)  # "mixed" counts as colour
     if source not in ("printhub", "walk-in"):
         raise ValueError("source")
-    return {"time": when, "source": source, "order": order, "product": product,
+    return {"time": when, "file": file_name, "source": source, "order": order, "product": product,
             "quantity": _int(quantity), "size": size or jobs.sheet_size(row[6].strip()),
             "color": cs, "bw": bs, "sheets": sheets, "paper": paper_name or row[7].strip()}
 
@@ -202,6 +226,12 @@ class CounterScreen:
         ttk.Button(top, text="← Back", command=self.back).pack(side="left", padx=(0, 24))
         ttk.Label(top, text="Counter", style="Summary.TLabel").pack(side="left")
         ttk.Button(top, text="Open in Excel", command=self.open_log).pack(side="right")
+        ttk.Button(top, text="Export PDF", command=self.export_pdf).pack(side="right", padx=(0, 8))
+        saved = load_settings()
+        self.with_jobs = tk.BooleanVar(value=saved["include_jobs"])
+        self.with_costs = tk.BooleanVar(value=saved["include_costs"])
+        for text, var in (("Include the list of jobs", self.with_jobs), ("Include costs", self.with_costs)):
+            ttk.Checkbutton(top, text=text, variable=var, command=self.save_settings).pack(side="right", padx=(0, 14))
 
         bar = ttk.Frame(f)
         bar.grid(row=1, column=0, sticky="we", pady=(12, 0))
@@ -255,8 +285,10 @@ class CounterScreen:
         for name, b in self.period_buttons.items():
             b.config(style="Selected.TButton" if name == chosen else "TButton")
         self.range_label.config(text=range_text(start, end))
-        cost_table = costs.Costs(costs.load(self.rules))
-        self.result = sections(read_log(), start, end, cost_table)
+        self.cost_table = cost_table = costs.Costs(costs.load(self.rules))
+        entries = read_log()
+        self.entries = [e for e in entries if start <= e["time"].date() <= end]
+        self.result = sections(entries, start, end, cost_table)
         inner = self.scroll.inner
         for w in inner.winfo_children():
             w.destroy()
@@ -314,6 +346,42 @@ class CounterScreen:
         for r, values in enumerate(rows, start=1):
             for c, text in enumerate(values):
                 ttk.Label(t, text=text).grid(row=r, column=c, sticky="w", padx=(0, 28), pady=1)
+
+    def save_settings(self):
+        try:
+            path = routing.app_dir() / SETTINGS_FILE
+            tmp = path.with_name(f".{path.name}.tmp")
+            tmp.write_text(json.dumps({"include_costs": self.with_costs.get(),
+                                       "include_jobs": self.with_jobs.get()}), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError:
+            pass  # only a convenience
+
+    def export_pdf(self):
+        """The period now showing as a PDF: Save as (Documents), write it, open it."""
+        import counter_pdf  # pypdfium2's drawing is only needed here
+        path = filedialog.asksaveasfilename(
+            parent=self.win, title="Export the Counter to PDF", initialdir=documents_dir(),
+            initialfile=counter_pdf.file_name(self.start, self.end), defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")])
+        if not path:
+            return
+        try:
+            with jobs.PDF_LOCK:
+                counter_pdf.export(path, self.result, self.entries, self.start, self.end, self.cost_table,
+                                   self.with_costs.get(), self.with_jobs.get())
+        except OSError:
+            messagebox.showwarning(parent=self.win, title="Counter",
+                                   message=f"Could not save {os.path.basename(path)}.\n\n"
+                                           f"Close the PDF and try again.")
+            return
+        except Exception as e:
+            messagebox.showwarning(parent=self.win, title="Counter", message=f"Could not make the PDF.\n\n{e}")
+            return
+        try:
+            os.startfile(path)
+        except OSError:
+            pass
 
     def open_log(self):
         path = routing.app_dir() / jobs.LOG_FILE
