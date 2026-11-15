@@ -397,16 +397,13 @@ class WebsiteSync:
             pass  # the log must never stop the sync
 
     def status(self):
-        """(text, red) for the PrintHub top bar, plus lines for orders that keep failing (shown in red)."""
+        """(text, red) for the menu and the PrintHub top bar, plus lines for orders that keep failing (red).
+        Only on / off / can't connect (Tesla, 2026-11-15); the reason and the times are in sync_log.txt."""
         with self.lock:
             if not self.on:
-                return "Website sync: off (no printhub_token.txt)", False, []
+                return "Website sync: off", False, []
             stuck = [f"{n} can't be downloaded: {why}" for n, (tries, why) in sorted(self.failures.items())
                      if tries >= RED_AFTER] + self.notices
-            waiting = f", {len(self.outbox)} waiting to report" if self.outbox else ""
-            if self.last_check is None:
-                return "Website: checking…" + waiting, False, stuck
-            if self.error:
-                ok = f"{self.last_ok:%H:%M}" if self.last_ok else "never"
-                return f"Website: can't connect ({self.error}), last OK {ok}" + waiting, True, stuck
-            return f"Website: checked {self.last_check:%H:%M}, {self.new} new" + waiting, False, stuck
+            if self.last_check is not None and self.error:
+                return "Website sync: can't connect", True, stuck
+            return "Website sync: on", False, stuck

@@ -156,10 +156,11 @@ FIRST REAL SYNC (website orders arrive by themselves) - added 2026-11-05
      PRINTROUTER_TOKEN. Save. (Never send this secret in a chat.)
      In Explorer, check it is not called printhub_token.txt.txt.
   2. Start PrintRouter with the shortcut, open PrintHub. The top bar should
-     say "Website: checked hh:mm, 0 new" within about a minute.
+     say "Website sync: on".
      If it says "Website sync: off", the file name is wrong.
-     If it is red ("can't connect (wrong or missing token (401))"), the
-     secret in the file doesn't match the one in Vercel.
+     If it is red ("Website sync: can't connect") and sync_log.txt says
+     "wrong or missing token (401)", the secret in the file doesn't match
+     the one in Vercel.
   3. On the website, order and pay a test document (test card
      4242 4242 4242 4242 while the website is in test mode). Use a Word file
      this time: Office on this PC turns it into document.pdf.

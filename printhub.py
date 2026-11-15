@@ -319,7 +319,7 @@ class PrintHubView:
         self.refresh_run_label()
 
     def show_sync(self):
-        """The website sync's state in the top bar: off, last check, or red when it can't connect."""
+        """The website sync's state in the top bar: on, off, or red when it can't connect."""
         if self.website is not None:
             text, red, stuck = self.website.status()
             self.sync_label.config(text="\n".join([text] + stuck),
