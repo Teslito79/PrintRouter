@@ -1,4 +1,5 @@
-"""The main menu PrintRouter opens on: Walk-in, PrintHub, Counter, Prices (Tesla, 2026-11-15).
+"""The main menu PrintRouter opens on: Walk-in, PrintHub, Counter, Prices (Tesla, 2026-11-15),
+Toners (2026-11-16).
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X)
 comes back here; closing the menu closes PrintRouter. The walk-in screen is made at start and only
@@ -13,6 +14,7 @@ import costs
 import counter
 import printhub
 import theme
+import toners
 
 
 class MainMenu:
@@ -26,6 +28,9 @@ class MainMenu:
         theme.dark_title_bar(walk_in)
         self.rules = self.walkin.rules
         self.printhub = None
+        # Copier counters and toner levels, read at start and every 10 minutes (toners.py).
+        self.toners = toners.TonerWatch(self.rules)
+        self.toners.start()
 
         self.win = win = tk.Toplevel(root)
         win.title("PrintRouter")
@@ -33,18 +38,19 @@ class MainMenu:
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self.quit)
         style = ttk.Style(win)
-        style.configure("Menu.TButton", font=("Segoe UI", 18, "bold"), padding=(20, 22))
+        style.configure("Menu.TButton", font=("Segoe UI", 18, "bold"), padding=(20, 16))
         style.configure("Title.TLabel", font=("Segoe UI", 26, "bold"))
         f = ttk.Frame(win, padding=(48, 36))
         f.grid(sticky="nsew")
         ttk.Label(f, text="PrintRouter", style="Title.TLabel").grid(row=0, column=0, pady=(0, 28))
         for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("PrintHub", self.open_printhub),
-                                             ("Counter", self.open_counter), ("Prices", self.open_prices)),
+                                             ("Counter", self.open_counter), ("Prices", self.open_prices),
+                                             ("Toners", self.open_toners)),
                                             start=1):
             ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command).grid(
-                row=r, column=0, sticky="we", pady=8)
+                row=r, column=0, sticky="we", pady=7)
         self.sync_label = ttk.Label(f, text="", style="Hint.TLabel", justify="center", wraplength=380)
-        self.sync_label.grid(row=6, column=0, pady=(24, 0))
+        self.sync_label.grid(row=7, column=0, pady=(24, 0))
         theme.dark_title_bar(win)
         self.show_sync()
 
@@ -90,6 +96,10 @@ class MainMenu:
             return
         papers = sorted({e["paper"] for e in counter.read_log() if e["paper"]})
         screen = costs.PricesScreen(self.root, self.rules, on_back=self.show_menu, papers_in_log=papers)
+        self.open_screen(screen.win)
+
+    def open_toners(self):
+        screen = toners.TonersScreen(self.root, self.rules, self.toners, on_back=self.show_menu)
         self.open_screen(screen.win)
 
     def show_sync(self):

@@ -27,3 +27,10 @@ prices_password.json
 print_log.csv.tmp
 counter_export.json
 .counter_export.json.tmp
+toner_log.csv
+.toner_log.csv.tmp
+toner_state.json
+.toner_state.json.tmp
+toner_settings.json
+.toner_settings.json.tmp
+copier_check.txt
