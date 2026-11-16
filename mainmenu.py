@@ -47,8 +47,12 @@ class MainMenu:
                                              ("Counter", self.open_counter), ("Prices", self.open_prices),
                                              ("Toners", self.open_toners)),
                                             start=1):
-            ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command).grid(
-                row=r, column=0, sticky="we", pady=7)
+            button = ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command)
+            button.grid(row=r, column=0, sticky="we", pady=7)
+            if text == "Toners":
+                # A red dot while a spare toner count is at or below its minimum (toners.stock_low).
+                self.toner_dot = tk.Label(button, text="●", foreground=theme.ERROR, background=theme.BUTTON,
+                                          font=("Segoe UI", 16), borderwidth=0)
         self.sync_label = ttk.Label(f, text="", style="Hint.TLabel", justify="center", wraplength=380)
         self.sync_label.grid(row=7, column=0, pady=(24, 0))
         theme.dark_title_bar(win)
@@ -106,6 +110,14 @@ class MainMenu:
         """The website sync's state, the same line as in PrintHub."""
         text, red, stuck = self.walkin.sync.status()
         self.sync_label.config(text="\n".join([text] + stuck), foreground=theme.ERROR if red or stuck else "")
+        try:
+            low = toners.stock_low(self.rules["printers"])
+        except Exception:
+            low = False
+        if low:
+            self.toner_dot.place(relx=1.0, x=-12, y=6, anchor="ne")
+        else:
+            self.toner_dot.place_forget()
         self.win.after(2000, self.show_sync)
 
     # -------------------------------------------------------------- closing

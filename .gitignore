@@ -34,3 +34,7 @@ toner_state.json
 toner_settings.json
 .toner_settings.json.tmp
 copier_check.txt
+toner_stock.json
+.toner_stock.json.tmp
+toner_stock_log.csv
+.toner_stock_log.csv.tmp
