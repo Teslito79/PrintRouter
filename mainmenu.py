@@ -1,5 +1,5 @@
 """The main menu PrintRouter opens on: Walk-in, PrintHub, Counter, Prices (Tesla, 2026-11-15),
-Toners (2026-11-16).
+Data (toners, 2026-11-16).
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X)
 comes back here; closing the menu closes PrintRouter. The walk-in screen is made at start and only
@@ -45,11 +45,11 @@ class MainMenu:
         ttk.Label(f, text="PrintRouter", style="Title.TLabel").grid(row=0, column=0, pady=(0, 28))
         for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("PrintHub", self.open_printhub),
                                              ("Counter", self.open_counter), ("Prices", self.open_prices),
-                                             ("Toners", self.open_toners)),
+                                             ("Data", self.open_toners)),
                                             start=1):
             button = ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command)
             button.grid(row=r, column=0, sticky="we", pady=7)
-            if text == "Toners":
+            if command == self.open_toners:  # by the command, so renaming the button keeps its dot
                 # A red dot while a spare toner count is at or below its minimum (toners.stock_low).
                 self.toner_dot = tk.Label(button, text="●", foreground=theme.ERROR, background=theme.BUTTON,
                                           font=("Segoe UI", 16), borderwidth=0)

@@ -1,4 +1,4 @@
-"""Toner tracking: copier counters and toner levels over SNMP, toner changes, the Toners screen
+"""Toner tracking: copier counters and toner levels over SNMP, toner changes, the Data screen (called Toners until 2026-11-16)
 (Tesla, 2026-11-16).
 
 Reading only. Each copier in rules.json is asked with a few SNMP v2c GET / GETNEXT requests
@@ -563,11 +563,11 @@ class TonerWatch:
         self.wake.set()
 
     def address(self, pid, settings=None):
-        """(address, where it came from): typed in the Toners screen, else the queue's port."""
+        """(address, where it came from): typed in the Data screen, else the queue's port."""
         settings = settings or load_settings()
         typed = settings["addresses"].get(pid)
         if typed:
-            return typed, "typed in the Toners screen"
+            return typed, "typed in the Data screen"
         found = queue_address(self.printers[pid]["queue"])
         return (found, "from the Windows queue's port") if found else (None, "not found")
 
@@ -704,7 +704,7 @@ class TonerWatch:
         return path
 
 
-# ------------------------------------------------------------------ the Toners screen
+# ------------------------------------------------------------------ the Data screen (TonersScreen)
 
 def _fmt(n):
     return "not given" if n is None else f"{n:,}"
@@ -717,7 +717,7 @@ class TonersScreen:
         self.rules, self.watch, self.on_back = rules, watch, on_back
         self.printers = rules["printers"]
         self.win = win = tk.Toplevel(root)
-        win.title("PrintRouter: Toners")
+        win.title("PrintRouter: Data")
         win.geometry("1300x900")
         win.minsize(1150, 600)
         win.protocol("WM_DELETE_WINDOW", self.back)
@@ -735,7 +735,7 @@ class TonersScreen:
         top = ttk.Frame(f)
         top.grid(row=0, column=0, sticky="we")
         ttk.Button(top, text="← Back", command=self.back).pack(side="left", padx=(0, 24))
-        ttk.Label(top, text="Toners", style="Summary.TLabel").pack(side="left")
+        ttk.Label(top, text="Data", style="Summary.TLabel").pack(side="left")
         for text, command in (("Copier check", self.copier_check), ("Open in Excel", self.open_log),
                               ("Read now", self.read_now), ("Toner replaced…", self.replaced)):
             ttk.Button(top, text=text, command=command,
@@ -865,12 +865,12 @@ class TonersScreen:
     def open_log(self):
         path = _path(LOG_FILE)
         if not path.exists():
-            messagebox.showinfo(parent=self.win, title="Toners", message="No toner change is recorded yet.")
+            messagebox.showinfo(parent=self.win, title="Data", message="No toner change is recorded yet.")
             return
         try:
             os.startfile(path)
         except OSError as e:
-            messagebox.showwarning(parent=self.win, title="Toners", message=f"Could not open {path.name}.\n\n{e}")
+            messagebox.showwarning(parent=self.win, title="Data", message=f"Could not open {path.name}.\n\n{e}")
 
     def copier_check(self):
         self.status.config(text="Copier check: reading every copier…")
@@ -890,7 +890,7 @@ class TonersScreen:
             return
         if error:
             self.status.config(text="")
-            messagebox.showwarning(parent=self.win, title="Toners", message=f"Could not write {CHECK_FILE}.\n\n{error}")
+            messagebox.showwarning(parent=self.win, title="Data", message=f"Could not write {CHECK_FILE}.\n\n{error}")
             return
         self.status.config(text=f"Written: {path}")
         try:
@@ -902,7 +902,7 @@ class TonersScreen:
         c = next((c for c in read_changes() if c["id"] == change_id), None)
         if c is None:
             return
-        if messagebox.askyesno(parent=self.win, title="Toners",
+        if messagebox.askyesno(parent=self.win, title="Data",
                                message=f"Remove the {COLOUR_NAMES[c['colour']].lower()} toner change on "
                                        f"{self.printers[c['copier']]['label']} of {c['time']:%d/%m/%Y %H:%M}?"):
             self.watch.remove(change_id)
@@ -959,7 +959,7 @@ class AddressDialog:
         try:
             save_settings(settings)
         except OSError as e:
-            messagebox.showwarning(parent=self.dlg, title="Toners", message=f"Could not save.\n\n{e}")
+            messagebox.showwarning(parent=self.dlg, title="Data", message=f"Could not save.\n\n{e}")
             return
         self.dlg.destroy()
         self.screen.read_now()
