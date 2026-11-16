@@ -49,6 +49,8 @@ $s = $shell.CreateShortcut($link)
 $s.TargetPath = $newBat
 $s.WorkingDirectory = $admin
 $s.Description = 'Open PrintRouter'
+$icon = Join-Path $admin 'icon.ico'
+if (Test-Path -LiteralPath $icon) { $s.IconLocation = "$icon,0" }
 $s.Save()
 Write-Host "Made the shortcut: $link"
 

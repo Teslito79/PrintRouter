@@ -108,7 +108,14 @@ def on_surface(container):
 
 
 def dark_title_bar(window):
-    """Make a window's title bar dark (Windows 10 2004+ / 11). Does nothing if Windows refuses."""
+    """Make a window's title bar dark (Windows 10 2004+ / 11). Does nothing if Windows refuses.
+    Also gives the window PrintRouter's taskbar details (appicon.window), as every window calls this."""
+    try:
+        import appicon
+        window.update_idletasks()  # the window's frame must exist before its taskbar details are set
+        appicon.window(window)
+    except Exception:
+        pass
     try:
         import ctypes
         window.update_idletasks()

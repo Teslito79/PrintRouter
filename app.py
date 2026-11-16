@@ -759,7 +759,11 @@ def main():
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # sharp text on scaled screens
     except Exception:
         pass
+    import appicon
+    appicon.set_app_id()  # its own taskbar button and icon, not Python's
     root = tk.Tk()
+    appicon.apply(root)  # every window opened from here on shows icon.ico
+    appicon.fix_shortcut_later()  # PrintRouter.lnk in the top folder gets the icon (in the background)
     try:
         rules = routing.load_json("rules.json")
         routing.load_json("prices.json")
