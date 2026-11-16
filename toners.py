@@ -665,7 +665,7 @@ class TonerWatch:
     def check_file(self):
         """Copier check: read every copier once and write copier_check.txt (no community, no secrets)."""
         settings = load_settings()
-        lines = [f"PrintRouter copier check, {datetime.datetime.now():%d/%m/%Y %H:%M}", ""]
+        lines = [f"ORCA copier check, {datetime.datetime.now():%d/%m/%Y %H:%M}", ""]
         for pid, p in self.printers.items():
             address, where = self.address(pid, settings)
             r = read_copier(address, settings["community"], self.timeout)
@@ -717,7 +717,7 @@ class TonersScreen:
         self.rules, self.watch, self.on_back = rules, watch, on_back
         self.printers = rules["printers"]
         self.win = win = tk.Toplevel(root)
-        win.title("PrintRouter: Data")
+        win.title("ORCA - Data")
         win.geometry("1300x900")
         win.minsize(1150, 600)
         win.protocol("WM_DELETE_WINDOW", self.back)

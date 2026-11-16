@@ -1,4 +1,4 @@
-# PrintHub for PrintRouter: specification
+# PrintHub for ORCA: specification
 
 Status: 2026-11-04. Stages 1-3 built (tested with simulated copiers only; paper test at work pending). Stage 5a (product items, 3.4) built, tested with simulated copiers only. Stage 5b (website sync) not started.
 
@@ -99,16 +99,16 @@ Pending Orders/
 Orders/
   PH-10231/             laid out, printing
     order.json          written by the website (last, as the "complete" marker)
-    status.json         written by PrintRouter only (progress)
+    status.json         written by ORCA only (progress)
     01/                 a document
       job.json
       document.pdf
-      Options.txt       written by PrintRouter: the print settings in plain words
+      Options.txt       written by ORCA: the print settings in plain words
     02/                 a product
       job.json
       front.pdf, back.ai, ...  the customer's designs, in the format they uploaded, never changed
-      Options.txt       written by PrintRouter: product, quantity, options, cut size, files and sizes
-      PH-10231.cdr      blank CorelDRAW file copied by PrintRouter from templates/ (blank.cdr or <product>.cdr),
+      Options.txt       written by ORCA: product, quantity, options, cut size, files and sizes
+      PH-10231.cdr      blank CorelDRAW file copied by ORCA from templates/ (blank.cdr or <product>.cdr),
                         named after the order; PH-10231-01.cdr, PH-10231-02.cdr ... when the order has several products
       PH-10231.pdf      exported by the owner from PH-10231.cdr: the sheet that is printed
 Finished Orders/
@@ -192,7 +192,7 @@ Deliberately **not** in job.json (the shop decides these):
 - `rotate`: walk-in only.
 - Prices and receipts: the website charges; orders print no price receipt.
 
-### 3.3 status.json (written by PrintRouter only)
+### 3.3 status.json (written by ORCA only)
 
 Keeps progress across restarts, written atomically (temp file + rename, like `counter.json`). The website's files are never modified.
 
@@ -359,7 +359,7 @@ Each order folder in Finished Orders is deleted on its own **8 days (192 hours) 
 
 ### 3.5 Work notes and reports (2026-11-06)
 
-Tests and tasks on the work PC run through the repo's `work\` folder. The planning window (home PC) writes notes into `work\notes\` (and files they need into `work\files\`) and commits only those two folders; they reach the work PC with the `git pull` on every PrintRouter start. At work Tesla opens the **Work PC chat** (Claude Code in `C:\PrintRouter\ADMIN`), types go, and it guides him through the oldest note, writes `work\reports\<note>_report.md`, moves the note to `work\done\` and uploads only `work\` (`git add work`). The planning window reads the report at home. Rules for both chats: `CLAUDE.md` → "Work PC chat".
+Tests and tasks on the work PC run through the repo's `work\` folder. The planning window (home PC) writes notes into `work\notes\` (and files they need into `work\files\`) and commits only those two folders; they reach the work PC with the `git pull` on every ORCA start. At work Tesla opens the **Work PC chat** (Claude Code in `C:\PrintRouter\ADMIN`), types go, and it guides him through the oldest note, writes `work\reports\<note>_report.md`, moves the note to `work\done\` and uploads only `work\` (`git add work`). The planning window reads the report at home. Rules for both chats: `CLAUDE.md` → "Work PC chat".
 
 ## 4. Problems and decisions needed
 
@@ -419,6 +419,6 @@ Tests and tasks on the work PC run through the repo's `work\` folder. The planni
      - Main menu and top bar of the PrintHub window (Tesla, 2026-11-15): "Website sync: on", "Website sync: off" (no token file) or, in red, "Website sync: can't connect" (the last check failed; the reason and the times are in `sync_log.txt`). Orders that keep failing still get their own red line. `sync_log.txt` (gitignored): time, order number, what happened.
      - **Ready for courier → website** (2026-11-06, handoff `app/2026-11-06_03`; tested against a pretend website, the live call waits for handoff `website/2026-11-06_02`). When an order reaches Ready (`do_next_step`), `sync.report_ready` queues `{"order", "status": "ready", "queued_at", "tries"}` in `sync_outbox.json` next to the app (gitignored, written atomically, survives restarts) and sends it at once; the outbox is sent again at every check, without `jobs.PDF_LOCK`. Without `printhub_token.txt` nothing is queued and `sync_log.txt` gets "<order> ready: not reported, website sync is off".
      - Contract: POST `/api/printrouter/orders/status`, header `Authorization: Bearer <PRINTROUTER_TOKEN>`, body `{"order": "PH-10005", "status": "ready"}`. Only `ready` is accepted (else 400 `{"error": "bad status"}`). `paid` / `printing` → set `ready`, `ready_at = now()`, 200 `{"ok": true}`; already `ready` / `shipped` → no change, 200 `{"ok": true}` (safe to repeat); `cancelled` → 409 `{"error": "cancelled"}`; unknown order → 404 `{"error": "unknown order"}`; bad or missing token → 401, empty body.
-     - PrintRouter: 200 → removed from the outbox, logged "<order> reported ready to the website". 409 / 404 → removed, logged, and shown in red in the top bar ("PH-10005: website says cancelled" / "unknown order") until Reload is pressed. 401, any other answer, no connection or timeout → kept, `tries` + 1, sent again at the next check. While the outbox isn't empty the top bar adds ", 2 waiting to report".
+     - ORCA: 200 → removed from the outbox, logged "<order> reported ready to the website". 409 / 404 → removed, logged, and shown in red in the top bar ("PH-10005: website says cancelled" / "unknown order") until Reload is pressed. 401, any other answer, no connection or timeout → kept, `tries` + 1, sent again at the next check. While the outbox isn't empty the top bar adds ", 2 waiting to report".
      - Documents-only orders then move on to Orders by themselves as before; nothing prints before Start printing orders. **Product items** (2026-11-12, handoff `app/2026-11-12_02`): an item with `"kind": "product"` (job as in 3.4) has its `files` downloaded as uploaded, never converted and without `document.pdf`, and `job.json` written unchanged. The order is refused (whole order, logged, retried at every check) unless `job.files` lists 1 to 5 plain, unique names, each downloaded in that item, with a suffix pdf/png/jpg/jpeg/ai/eps/psd (any case), not `job.json`, `Options.txt` or `PH-…`, and `titles` has the same length. An unknown `kind` is refused too ("item 02: unknown kind 'x'"). Items without `kind` (documents) work as before. Feed item: `{"folder", "job": {…kind: product…}, "files": [{"name", "url"}]}`, `job.files[i]` = `files[i].name`.
      - `printhub_options.json` (9): not built.

@@ -21,14 +21,14 @@ MARGIN = 42.0
 WIDTH = PAGE_W - 2 * MARGIN
 FONT_DIR = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
 FONTS = {False: FONT_DIR / "arial.ttf", True: FONT_DIR / "arialbd.ttf"}  # Arial has Greek letters
-NOTE = "Counts what was sent from PrintRouter. Photocopies made at the copier are not included."
+NOTE = "Counts what was sent from ORCA. Photocopies made at the copier are not included."
 
 
 def file_name(start, end):
-    """'PrintRouter counter 2026-11-09 to 2026-11-15.pdf' (one date for a one-day range)."""
+    """'ORCA counter 2026-11-09 to 2026-11-15.pdf' (one date for a one-day range)."""
     if start == end:
-        return f"PrintRouter counter {start:%Y-%m-%d}.pdf"
-    return f"PrintRouter counter {start:%Y-%m-%d} to {end:%Y-%m-%d}.pdf"
+        return f"ORCA counter {start:%Y-%m-%d}.pdf"
+    return f"ORCA counter {start:%Y-%m-%d} to {end:%Y-%m-%d}.pdf"
 
 
 class Writer:
@@ -142,7 +142,7 @@ def build(path, result, entries, start, end, cost_table, include_costs, include_
     w = Writer()
     euro = costs.euro
     num = counter.number
-    w.line("PrintRouter: what was printed", 18, True, 8)
+    w.line("ORCA: what was printed", 18, True, 8)
     w.line(counter.range_text(start, end), 13, True, 4)
     w.line(f"Made {now.day} {now:%b %Y, %H:%M}", 9, gap=4)
     w.line(NOTE, 9, gap=10)

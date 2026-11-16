@@ -1,30 +1,32 @@
-# One time: move PrintRouter (the whole folder, with its git history) into an ADMIN subfolder
-# and leave only a PrintRouter shortcut in the top folder. Started by "Move into ADMIN folder.bat".
+# One time: move ORCA (the whole folder, with its git history) into an ADMIN subfolder
+# and leave only an ORCA shortcut in the top folder. Started by "Move into ADMIN folder.bat".
 # Safe to run again: it only moves what is still in the top folder.
 param([Parameter(Mandatory = $true)][string]$Root)
 
 $root = (Resolve-Path -LiteralPath $Root).Path.TrimEnd('\')
 if ((Split-Path $root -Leaf) -ieq 'ADMIN') { $root = Split-Path $root -Parent }  # started from inside ADMIN
 $admin = Join-Path $root 'ADMIN'
-$link = Join-Path $root 'PrintRouter.lnk'
-$oldBat = Join-Path $root 'PrintRouter.bat'
-$newBat = Join-Path $admin 'PrintRouter.bat'
+$link = Join-Path $root 'ORCA.lnk'
+$oldLink = Join-Path $root 'PrintRouter.lnk'  # the shortcut's name before 2026-11-16 (ORCA was PrintRouter)
+$oldBat = Join-Path $root 'PrintRouter.bat'  # where the start file was before the move, under its old name
+$oldAdminBat = Join-Path $admin 'PrintRouter.bat'
+$newBat = Join-Path $admin 'ORCA.bat'
 
-Write-Host "=== Move PrintRouter into $admin ==="
+Write-Host "=== Move ORCA into $admin ==="
 Write-Host ""
 
-# PrintRouter must be closed: Windows can't move a folder the app is using.
+# ORCA must be closed: Windows can't move a folder the app is using.
 $open = Get-CimInstance Win32_Process |
     Where-Object { $_.Name -match '^(pythonw?|pyw?)\.exe$' -and $_.CommandLine -match 'app\.py' }
 if ($open) {
-    Write-Host "PrintRouter is open. Close its window, then run this again."
+    Write-Host "ORCA is open. Close its window, then run this again."
     exit 1
 }
 
 New-Item -ItemType Directory -Force -Path $admin | Out-Null
 $failed = @()
 foreach ($item in Get-ChildItem -LiteralPath $root -Force) {
-    if ($item.Name -ieq 'ADMIN' -or $item.Name -ieq 'PrintRouter.lnk') { continue }
+    if ($item.Name -ieq 'ADMIN' -or $item.Name -ieq 'ORCA.lnk' -or $item.Name -ieq 'PrintRouter.lnk') { continue }
     $dest = Join-Path $admin $item.Name
     if (Test-Path -LiteralPath $dest) {
         $failed += "$($item.Name): there is already one in ADMIN"
@@ -38,7 +40,7 @@ foreach ($item in Get-ChildItem -LiteralPath $root -Force) {
 }
 
 if (-not (Test-Path -LiteralPath $newBat)) {
-    Write-Host "PrintRouter.bat is not in ADMIN. Nothing else was changed."
+    Write-Host "ORCA.bat is not in ADMIN. Nothing else was changed."
     $failed | ForEach-Object { Write-Host "  - $_" }
     exit 1
 }
@@ -48,13 +50,14 @@ $shell = New-Object -ComObject WScript.Shell
 $s = $shell.CreateShortcut($link)
 $s.TargetPath = $newBat
 $s.WorkingDirectory = $admin
-$s.Description = 'Open PrintRouter'
+$s.Description = 'Open ORCA'
 $icon = Join-Path $admin 'icon.ico'
 if (Test-Path -LiteralPath $icon) { $s.IconLocation = "$icon,0" }
 $s.Save()
 Write-Host "Made the shortcut: $link"
+if (Test-Path -LiteralPath $oldLink) { Remove-Item -LiteralPath $oldLink -Force -ErrorAction SilentlyContinue }
 
-# Shortcuts that opened the old PrintRouter.bat (desktop, Start menu, startup) now open the new one.
+# Shortcuts that opened the old start file (desktop, Start menu, startup) now open ADMIN\ORCA.bat.
 # Only the top of each place (desktops can hold huge folders); the Start menu two levels deep.
 $shortcuts = @()
 foreach ($place in @('Desktop', 'CommonDesktopDirectory', 'Startup', 'CommonStartup')) {
@@ -76,7 +79,7 @@ foreach ($file in $shortcuts) {
     if ($true) {
         try {
             $old = $shell.CreateShortcut($file.FullName)
-            if ($old.TargetPath -ieq $oldBat) {
+            if ($old.TargetPath -ieq $oldBat -or $old.TargetPath -ieq $oldAdminBat) {
                 $old.TargetPath = $newBat
                 $old.WorkingDirectory = $admin
                 $old.Save()
@@ -100,5 +103,5 @@ if ($failed) {
     $failed | ForEach-Object { Write-Host "  - $_" }
     exit 1
 }
-Write-Host "Done. Open PrintRouter with the PrintRouter shortcut in $root."
+Write-Host "Done. Open ORCA with the ORCA shortcut in $root."
 exit 0

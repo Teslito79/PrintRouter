@@ -1,4 +1,4 @@
-"""The Counter screen: what PrintRouter sent to the copiers in a date range (Tesla, 2026-11-15).
+"""The Counter screen: what ORCA sent to the copiers in a date range (Tesla, 2026-11-15).
 
 Reads print_log.csv (jobs.Jobs.log), old lines too, and shows Total, Walk-in and PrintHub: printed
 sides and sheets by sheet size and colour, by paper, and (PrintHub) by product, with the cost from
@@ -201,7 +201,7 @@ class CounterScreen:
         self.rules, self.on_back = rules, on_back
         self.today = today  # tests pass a fixed day
         self.win = win = tk.Toplevel(root)
-        win.title("PrintRouter: Counter")
+        win.title("ORCA - Counter")
         win.geometry("1000x900")
         win.minsize(820, 600)
         win.protocol("WM_DELETE_WINDOW", self.back)
@@ -253,7 +253,7 @@ class CounterScreen:
 
         self.range_label = ttk.Label(f, text="", style="Big.TLabel")
         self.range_label.grid(row=2, column=0, sticky="w", pady=(12, 0))
-        ttk.Label(f, text="Counts what was sent from PrintRouter. Photocopies made at the copier are not included.",
+        ttk.Label(f, text="Counts what was sent from ORCA. Photocopies made at the copier are not included.",
                   style="Hint.TLabel").grid(row=3, column=0, sticky="w", pady=(2, 8))
         self.scroll = costs.ScrollFrame(f)
         self.scroll.grid(row=4, column=0, sticky="nsew")

@@ -1,8 +1,8 @@
-"""The main menu PrintRouter opens on: Walk-in, PrintHub, Counter, Prices (Tesla, 2026-11-15),
+"""The main menu ORCA opens on: Walk-in, PrintHub, Counter, Prices (Tesla, 2026-11-15),
 Data (toners, 2026-11-16).
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X)
-comes back here; closing the menu closes PrintRouter. The walk-in screen is made at start and only
+comes back here; closing the menu closes ORCA. The walk-in screen is made at start and only
 hidden, so its files, the inbox, the website sync and the finished-order cleanup keep running
 whatever shows. PrintHub is made the first time it is opened and is then only hidden too.
 Counter and Prices are made fresh each time.
@@ -33,7 +33,7 @@ class MainMenu:
         self.toners.start()
 
         self.win = win = tk.Toplevel(root)
-        win.title("PrintRouter")
+        win.title("ORCA")
         win.configure(background=theme.BG)
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self.quit)
@@ -42,7 +42,7 @@ class MainMenu:
         style.configure("Title.TLabel", font=("Segoe UI", 26, "bold"))
         f = ttk.Frame(win, padding=(48, 36))
         f.grid(sticky="nsew")
-        ttk.Label(f, text="PrintRouter", style="Title.TLabel").grid(row=0, column=0, pady=(0, 28))
+        ttk.Label(f, text="ORCA", style="Title.TLabel").grid(row=0, column=0, pady=(0, 28))
         for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("PrintHub", self.open_printhub),
                                              ("Counter", self.open_counter), ("Prices", self.open_prices),
                                              ("Data", self.open_toners)),
@@ -123,11 +123,11 @@ class MainMenu:
     # -------------------------------------------------------------- closing
 
     def quit(self):
-        """Closing the menu closes PrintRouter (asks first while something is being sent)."""
+        """Closing the menu closes ORCA (asks first while something is being sent)."""
         if self.walkin.busy and not messagebox.askyesno(
-                parent=self.win, title="PrintRouter", message="Files are still being sent. Close anyway?"):
+                parent=self.win, title="ORCA", message="Files are still being sent. Close anyway?"):
             return
         if (self.printhub is not None and self.printhub.sending() and not messagebox.askyesno(
-                parent=self.win, title="PrintRouter", message="PrintHub orders are still being sent. Close anyway?")):
+                parent=self.win, title="ORCA", message="PrintHub orders are still being sent. Close anyway?")):
             return
         self.root.destroy()

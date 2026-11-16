@@ -37,7 +37,7 @@ TRAY = "Auto Tray Select"  # orders never pick a tray; the copier does from size
 # Orders laid out before (2026-11-05) used print.cdr / print.pdf; those names still work.
 PRINT_PDF = "print.pdf"
 PRINT_CDR = "print.cdr"
-OPTIONS_TXT = "Options.txt"  # what the customer ordered, for staff (written by PrintRouter)
+OPTIONS_TXT = "Options.txt"  # what the customer ordered, for staff (written by ORCA)
 PRODUCT_FILES = (".pdf", ".png", ".jpg", ".jpeg", ".ai", ".eps", ".psd")
 MAX_PRODUCT_FILES = 5
 MAX_CUT_MM = (297, 420)  # A3: the largest the copiers print

@@ -1,4 +1,4 @@
-"""PrintRouter: pick files, choose the options and the printer, and print.
+"""ORCA: pick files, choose the options and the printer, and print.
 
 Every file is first turned into a PDF, then sent to the printer picked in the
 options, or with Auto to the one the rules in rules.json choose. Receipts with the price print afterwards, either one for the whole
@@ -32,7 +32,7 @@ import routing
 import sync
 import theme
 
-WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter"
+WORK_DIR = Path(tempfile.gettempdir()) / "ORCA"
 FILE_TYPES = [
     ("Printable files", "*.pdf *.doc *.docx *.xls *.xlsx *.ppt *.pptx *.png *.jpg *.jpeg"),
     ("All files", "*.*"),
@@ -114,7 +114,7 @@ class App:
 
     def _build(self):
         root = self.root
-        root.title("PrintRouter: Walk-in")
+        root.title("ORCA - Walk-in")
         style = ttk.Style()
         theme.apply(root)
         style.configure(".", font=FONT)
@@ -392,7 +392,7 @@ class App:
             return
         bad = [Path(p).name for p in paths if Path(p).suffix.lower() not in convert.SUPPORTED_EXT]
         if bad:
-            messagebox.showwarning(parent=self.root, title="PrintRouter", message="These files can't be printed and were skipped:\n\n"
+            messagebox.showwarning(parent=self.root, title="ORCA", message="These files can't be printed and were skipped:\n\n"
                                    + "\n".join(bad) + "\n\nSupported: PDF, Word, Excel, PowerPoint, PNG, JPG.")
         for p in paths:
             if Path(p).suffix.lower() in convert.SUPPORTED_EXT:
@@ -513,7 +513,7 @@ class App:
         sheets = sum(job["sheets"] for _, job, *_ in batch)
         limit = self.rules.get("confirm_above_sheets", 0)
         if limit and sheets > limit:
-            if not messagebox.askyesno(parent=self.root, title="PrintRouter", message=f"This uses {sheets} sheets in total.\n\nPrint it?"):
+            if not messagebox.askyesno(parent=self.root, title="ORCA", message=f"This uses {sheets} sheets in total.\n\nPrint it?"):
                 return
         self.busy = True
         self.sending_to = {job["printer"] for _, job, *_ in batch}
@@ -622,7 +622,7 @@ class App:
         if error:
             self.refresh_counter()
             self.status.config(text="")
-            messagebox.showwarning(parent=self.root, title="PrintRouter", message=f"The counter receipt did not print; the counter is kept.\n\n{error}")
+            messagebox.showwarning(parent=self.root, title="ORCA", message=f"The counter receipt did not print; the counter is kept.\n\n{error}")
             return
         total = self.counter_total()
         del self.counter[:runs]  # only what was on the receipt
@@ -631,13 +631,13 @@ class App:
         try:
             self._save_counter()
         except OSError as e:
-            messagebox.showwarning(parent=self.root, title="PrintRouter", message=f"The receipt printed, but the counter file could not be "
+            messagebox.showwarning(parent=self.root, title="ORCA", message=f"The receipt printed, but the counter file could not be "
                                                   f"updated, so it may come back after a restart.\n\n{e}")
 
     def clear_counter(self):
         if not self.counter or self.counter_printing:
             return
-        if not messagebox.askyesno(parent=self.root, title="PrintRouter", message=f"Clear the counter ({receipt.fmt(self.prices, self.counter_total())}) "
+        if not messagebox.askyesno(parent=self.root, title="ORCA", message=f"Clear the counter ({receipt.fmt(self.prices, self.counter_total())}) "
                                                   f"without printing a receipt?"):
             return
         self.counter = []
@@ -645,7 +645,7 @@ class App:
         try:
             self._save_counter()
         except OSError as e:
-            messagebox.showwarning(parent=self.root, title="PrintRouter", message=f"The counter file could not be updated.\n\n{e}")
+            messagebox.showwarning(parent=self.root, title="ORCA", message=f"The counter file could not be updated.\n\n{e}")
 
     # ------------------------------------------------- results from workers
 
@@ -678,7 +678,7 @@ class App:
         elif kind == "turn":
             _, name, label, answer = msg
             answer["ok"] = messagebox.askokcancel(
-                parent=self.root, title="PrintRouter", message=f"The fronts of {name} were sent to {label}.\n\n"
+                parent=self.root, title="ORCA", message=f"The fronts of {name} were sent to {label}.\n\n"
                                f"When they are all out, turn the stack over, put it back in the "
                                f"Bypass Tray, then click OK to print the backs.\n\n"
                                f"Cancel: the backs are not printed.")
@@ -740,7 +740,7 @@ class App:
             lines.append("\nThe receipt did not print:")
             lines += [f"    • {e}" for e in receipt_errors]
         show = messagebox.showwarning if failed or receipt_errors else messagebox.showinfo
-        show(parent=self.root, title="PrintRouter", message="\n".join(lines))
+        show(parent=self.root, title="ORCA", message="\n".join(lines))
 
     def on_close(self):
         """Back (or the window's X): to the main menu. Not while files are being sent."""
@@ -763,18 +763,18 @@ def main():
     appicon.set_app_id()  # its own taskbar button and icon, not Python's
     root = tk.Tk()
     appicon.apply(root)  # every window opened from here on shows icon.ico
-    appicon.fix_shortcut_later()  # PrintRouter.lnk in the top folder gets the icon (in the background)
+    appicon.fix_shortcut_later()  # ORCA.lnk in the top folder gets the icon (in the background)
     try:
         rules = routing.load_json("rules.json")
         routing.load_json("prices.json")
     except Exception as e:
         root.withdraw()
-        messagebox.showerror("PrintRouter", f"Could not read the settings files.\n\n{e}")
+        messagebox.showerror("ORCA", f"Could not read the settings files.\n\n{e}")
         return
     problems = routing.check_rules(rules)
     if problems:
         root.withdraw()
-        messagebox.showerror("PrintRouter", "There is a problem in rules.json:\n\n" + "\n".join(problems))
+        messagebox.showerror("ORCA", "There is a problem in rules.json:\n\n" + "\n".join(problems))
         return
     import mainmenu
     root.withdraw()  # the hidden Tk root: the main menu and every screen are their own windows

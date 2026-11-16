@@ -43,7 +43,7 @@ import receipt
 import routing
 import theme
 
-WORK_DIR = Path(tempfile.gettempdir()) / "PrintRouter" / "printhub"
+WORK_DIR = Path(tempfile.gettempdir()) / "ORCA" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting",
               "STAPLE": "Stapling"}
 # Part states that keep a copier taken. 'turn': fronts of a hand-turned item are out, waiting for Print backs.
@@ -237,7 +237,7 @@ class PrintHubView:
 
     def _build(self):
         win = self.win
-        win.title("PrintRouter: PrintHub")
+        win.title("ORCA - PrintHub")
         win.geometry("1200x900")
         win.minsize(1000, 700)
         f = ttk.Frame(win, padding=16)
@@ -350,7 +350,7 @@ class PrintHubView:
 
     def _signature(self):
         """Order folders and when their order.json last changed, plus every file in the item folders
-        (job.json, customer files, print.pdf), except the ones PrintRouter writes or CorelDRAW keeps saving."""
+        (job.json, customer files, print.pdf), except the ones ORCA writes or CorelDRAW keeps saving."""
         found = []
         for folder in (self.pending, self.folder):
             try:

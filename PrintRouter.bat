@@ -17,4 +17,5 @@ if not errorlevel 1 (
     )
 )
 
-start "" pyw -3.14 app.py
+rem PrintRouter.bat is now ORCA.bat: this hands over (kept for old shortcuts and pins).
+call "%~dp0ORCA.bat" --no-update

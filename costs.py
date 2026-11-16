@@ -22,7 +22,7 @@ COSTS_FILE = "costs.json"
 PASSWORD_FILE = "prices_password.json"
 SIZES = ("A4", "A3")
 MODES = (("bw", "Black and white"), ("color", "Colour"))
-# The website's document papers (Website lib/papers.ts). Website documents reach PrintRouter only with
+# The website's document papers (Website lib/papers.ts). Website documents reach ORCA only with
 # a driver paper type, so the Counter finds their paper extra under that driver type.
 DOCUMENT_PAPERS = ("Normal 80 gsm", "Thick 160 gsm", "Glossy 100 gsm", "Glossy 200 gsm", "Glossy 300 gsm")
 ITERATIONS = 200_000
@@ -32,7 +32,7 @@ FONT = ("Segoe UI", 12)  # entries: ttk styles don't set their font
 # ------------------------------------------------------------------ the costs file
 
 def default_papers(rules):
-    """Every paper name PrintRouter knows: website product papers, website document papers, driver types."""
+    """Every paper name ORCA knows: website product papers, website document papers, driver types."""
     names = [n for n in rules.get("product_papers", {}) if not n.startswith("_")]
     names += list(DOCUMENT_PAPERS) + list(rules.get("paper_types", []))
     seen, out = set(), []
@@ -279,7 +279,7 @@ class PricesScreen:
         self.data = load(rules)
         add_papers(self.data, self.papers_in_log)
         self.win = win = tk.Toplevel(root)
-        win.title("PrintRouter: Prices")
+        win.title("ORCA - Prices")
         win.geometry("900x860")
         win.minsize(760, 600)
         win.protocol("WM_DELETE_WINDOW", self.back)

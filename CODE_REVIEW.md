@@ -45,7 +45,7 @@ Test orders PH-1012 (flyers, C3000), PH-1013 (business cards, C4510 Thick 4), PH
 The former `WORK_TEST_CHECKLIST.txt` (steps 1-5 from 2026-11-03, done in the paper test of 2026-11-05, plus the hand-fed paper test and the first real sync added on 2026-11-05), kept as it was:
 
 ```text
-PRINTROUTER - TEST AT THE WORK PC (written 2026-11-03 at home)
+ORCA - TEST AT THE WORK PC (written 2026-11-03 at home)
 ==============================================================
 
 FOR CLAUDE (the chat at work): read this first
@@ -53,7 +53,7 @@ FOR CLAUDE (the chat at work): read this first
 - Project: C:\PrintRouter. Read PROJECT_SUMMARY.txt and PRINTHUB_SPEC.md after step 1.
 - Since the work PC last updated, these were added at home and uploaded to GitHub:
     * Upload changes.bat / Download changes.bat: double-click scripts to sync with GitHub.
-    * PrintRouter.bat now runs "git pull" before starting the app (auto-update).
+    * ORCA.bat now runs "git pull" before starting the app (auto-update).
     * PrintHub stages 1-3: orders.py (reads order folders), jobs.py (the print logic,
       MOVED out of app.py, used by both windows), printhub.py (PrintHub window:
       a queue per copier, Start printing orders, Pages collected, next-step buttons,
@@ -88,7 +88,7 @@ STEP 1 - Get the new version (only this once)
 
 STEP 2 - Check the normal window still prints
   (The print code moved to a new file, so check it once.)
-  - Start the app the usual way (PrintRouter.bat).
+  - Start the app the usual way (ORCA.bat).
   - Print one ordinary file, e.g. 2 pages, double-sided, B&W, receipt "One for all".
   - Check: it comes out right on the C4510, double-sided, and the receipt prints.
 
@@ -125,7 +125,7 @@ STEP 5 - Write down the results
 
 
 HAND-FED THICK PAPER TEST (350 gsm, turned by hand) - added 2026-11-05
-  Needs: a few A4 sheets of Smooth white 350 gsm, PrintRouter updated.
+  Needs: a few A4 sheets of Smooth white 350 gsm, ORCA updated.
   1. Load the 350 gsm sheets in the Bypass Tray of the IM C4510.
   2. PrintHub: press "Add sample orders". PH-1015 (Business cards x 250, Smooth
      white 350 gsm, both sides) appears in Pending Orders.
@@ -155,7 +155,7 @@ FIRST REAL SYNC (website orders arrive by themselves) - added 2026-11-05
      Put in it, on one line, the same secret you put in Vercel as
      PRINTROUTER_TOKEN. Save. (Never send this secret in a chat.)
      In Explorer, check it is not called printhub_token.txt.txt.
-  2. Start PrintRouter with the shortcut, open PrintHub. The top bar should
+  2. Start ORCA with the shortcut, open PrintHub. The top bar should
      say "Website sync: on".
      If it says "Website sync: off", the file name is wrong.
      If it is red ("Website sync: can't connect") and sync_log.txt says

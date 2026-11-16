@@ -69,7 +69,7 @@ def choose_printer(rules, job, busy=()):
     """Return (printer_id, reason) for a job.
 
     job keys: color, content ('document'/'pictures'), duplex, paper, paper_type, tray, product, gsm.
-    busy: copiers PrintRouter is using right now; a rule's if_busy copier is taken instead of a busy one.
+    busy: copiers ORCA is using right now; a rule's if_busy copier is taken instead of a busy one.
     A paper heavier than the chosen copier's max_gsm goes to the first copier that takes it.
     """
     for rule in rules["rules"]:

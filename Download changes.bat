@@ -1,5 +1,5 @@
 @echo off
-rem Downloads the latest version of PrintRouter from GitHub.
+rem Downloads the latest version of ORCA from GitHub.
 cd /d "%~dp0"
 echo === Download latest changes from GitHub ===
 echo.

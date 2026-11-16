@@ -1,6 +1,6 @@
 {
   "_help": [
-    "Routing rules for PrintRouter. Rules are checked top to bottom; the FIRST rule whose 'if' matches picks the printer.",
+    "Routing rules for ORCA. Rules are checked top to bottom; the FIRST rule whose 'if' matches picks the printer.",
     "Conditions in 'if' (all must match): color true/false, content 'document'/'pictures', duplex true/false,",
     "paper, paper_type or tray (a value or a list of values).",
     "paper_types and trays must be spelled exactly as the printer drivers name them; they are sent to the printer with each job.",
@@ -10,7 +10,7 @@
     "they are moved to printed_folder, into a folder with the date. Both are next to the app unless a full path is given.",
     "printers max_gsm: the heaviest paper a copier takes (Tesla, 2026-11-13: IM C4510 up to 350 gsm, IM C3000 up to 300 gsm).",
     "A heavier paper goes to the first copier listed that takes it. Only website product papers name their gsm.",
-    "A rule's if_busy: the copier used instead when the rule's copier is busy with another PrintRouter job (colour: IM C3000 first, then IM C4510)."
+    "A rule's if_busy: the copier used instead when the rule's copier is busy with another ORCA job (colour: IM C3000 first, then IM C4510)."
   ],
   "printers": {
     "C4510": { "queue": "RICOH IM C4510 PCL 6",   "label": "IM C4510", "max_gsm": 350 },
@@ -114,7 +114,7 @@
     "229x324": {"A4": 1}
   },
   "website": {
-    "_help": "Website sync (stage 5b): every check_seconds PrintRouter downloads the website's paid orders into Pending Orders. Runs only when printhub_token.txt is next to the app (the work PC). url changes when the domain is bought.",
+    "_help": "Website sync (stage 5b): every check_seconds ORCA downloads the website's paid orders into Pending Orders. Runs only when printhub_token.txt is next to the app (the work PC). url changes when the domain is bought.",
     "url": "https://print-hub-vert.vercel.app",
     "check_seconds": 60
   },

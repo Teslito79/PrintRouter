@@ -99,7 +99,7 @@ class Jobs:
         self.prices = prices
         self.printers = rules["printers"]
         self.printer_options = self._read_printer_options()
-        # Functions giving the copiers PrintRouter is using right now (the PrintHub view, the main
+        # Functions giving the copiers ORCA is using right now (the PrintHub view, the main
         # window's batch being sent); a colour job then goes to the rule's if_busy copier.
         self.busy_sources = []
 

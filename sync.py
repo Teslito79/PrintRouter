@@ -271,7 +271,7 @@ class WebsiteSync:
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Accept", "application/json")
-        req.add_header("User-Agent", "PrintRouter")
+        req.add_header("User-Agent", "ORCA")
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
@@ -292,7 +292,7 @@ class WebsiteSync:
     def _fetch(self, url, dest):
         """Download a signed file link (no token sent: the link itself is the permission)."""
         self._check_url(url, False)
-        req = urllib.request.Request(url, headers={"User-Agent": "PrintRouter"})
+        req = urllib.request.Request(url, headers={"User-Agent": "ORCA"})
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as r, open(dest, "wb") as out:
                 shutil.copyfileobj(r, out, CHUNK)

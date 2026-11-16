@@ -26,4 +26,4 @@ Printing the sheet to PDF:
    columns (how many pieces on the sheet) and press Apply.
 3. Choose the printer "Microsoft Print to PDF" and print.
 4. Save the file as PH-10240.pdf in the same item folder (keep that name).
-5. Press Layout done in PrintHub. PrintRouter prints that PDF at actual size.
+5. Press Layout done in PrintHub. ORCA prints that PDF at actual size.
