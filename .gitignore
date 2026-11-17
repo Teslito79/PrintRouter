@@ -38,3 +38,6 @@ toner_stock.json
 .toner_stock.json.tmp
 toner_stock_log.csv
 .toner_stock_log.csv.tmp
+walkin_customers.json
+.walkin_customers.json.tmp
+Walk-in/
