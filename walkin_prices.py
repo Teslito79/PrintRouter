@@ -23,6 +23,7 @@ import routing
 FILE = "Walk-in_Prices.xlsx"
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+TRIAL = "Trial price list: every price is 0"  # the Read me title says TEST (2026-11-17_09)
 NO_PRICES = f"The price list has no prices yet: fill in the yellow cells in {FILE}. Until then no item can be added."
 LABEL_SHEET = "Label sheet"
 NORMAL_PAPER = "Normal 80 gsm"  # the documents' plain paper: priced from the "Smooth white 80 gsm" row
@@ -111,6 +112,7 @@ class PriceList:
     def __init__(self):
         self.warnings = []
         self.missing = None
+        self.trial = False  # the sheet's Read me title contains "TEST": a trial price list
         self.filled = 0  # cells with a number in them
         self.copies = {(s, m): [None, None, None] for s in ("A4", "A3") for m in ("bw", "color")}  # per copy, tiers
         self.papers = {}  # paper name -> {"A4": EUR per sheet or None, "A3": ...}, in sheet order
@@ -386,6 +388,10 @@ def load(path=None):
             pl.warn(name, "-", f"couldn't be read ({type(e).__name__}): it gives no prices.")
     if pl.filled == 0:
         pl.warnings.insert(0, NO_PRICES)
+    title = next((v[0] for _, v in sheets.get("Read me", []) if v and v[0]), "") or ""
+    if "TEST" in str(title):
+        pl.trial = True
+        pl.warnings.insert(0, TRIAL)  # so nobody mistakes it for real prices
     return pl
 
 

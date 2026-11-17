@@ -4,7 +4,7 @@ sheet first, every print logged in print_log.csv as source walk-in with the orde
 - Preparer: converts and checks each item's file in the background (documents to PDF with convert.py, page count
   and colour; products: the laid-out PDF must be A4 or A3), so the screen never waits.
 - settings_for / job_for: the print settings of an item (staff can override them per item, kept in order.json).
-- cover_pdf: the plain A4 cover sheet (customer, number, total, date, items).
+- cover_pdf: the plain A4 cover sheet (customer, number, date, items; no prices on paper, 2026-11-17_09).
 - The queue that sends them (customer batches per copier, Pages collected, Print backs): walkin_queue.py.
 """
 import datetime
@@ -169,10 +169,22 @@ def log_info(order, item=None):
 
 # ------------------------------------------------------------------ the cover sheet
 
-def cover_pdf(order, path, when=None):
-    """A plain A4 page: the number large, customer, total, date, items; every line centred left to right, the
-    block centred top to bottom (Tesla, 2026-11-17). An item list too long for one page starts at the top margin
-    and runs on, so nothing is cut off. Long item lines wrap, each part centred."""
+def paper_prices(rules=None):
+    """rules.json walkin_paper_prices: money on walk-in paper (the cover sheet's total). false while testing
+    (Tesla, 2026-11-17: "do not include any prices"); a missing setting counts as false."""
+    if rules is None:
+        try:
+            rules = routing.load_json("rules.json")
+        except Exception:
+            rules = {}
+    return rules.get("walkin_paper_prices") is True
+
+
+def cover_pdf(order, path, when=None, rules=None):
+    """A plain A4 page: the number large, customer, date, items; every line centred left to right, the block centred
+    top to bottom (Tesla, 2026-11-17). No prices on paper while rules.json walkin_paper_prices is false (2026-11-17_09);
+    true brings the total line back. Item lines never carry money (walkin_pricing.describe). An item list too long
+    for one page starts at the top margin and runs on, so nothing is cut off. Long item lines wrap, each part centred."""
     import counter_pdf
     when = when or datetime.datetime.now()
     w = counter_pdf.Writer()
@@ -180,12 +192,15 @@ def cover_pdf(order, path, when=None):
     lines = [(f"#{order['number']}", 72, True, 22)]  # (text, size, bold, space after)
     lines += [(text, 18, True, 8) for text in (c.get("name"), c.get("phone"), c.get("email")) if text]
     if len(lines) > 1:
-        lines[-1] = lines[-1][:3] + (lines[-1][3] + 10,)  # the gap that w.space(10) gave before the total
+        lines[-1] = lines[-1][:3] + (lines[-1][3] + 10,)  # the gap after the customer block
     else:
         lines[0] = lines[0][:3] + (lines[0][3] + 10,)
-    due = walkin_orders.price_due(order)
-    typed = order.get("changed_total") is not None and not order.get("rounding")  # test orders from before 17_07
-    lines.append((f"Total: EUR {due:,.2f}" + ("  (changed price)" if typed else ""), 18, True, 8))  # rounded: the amount only
+    if paper_prices(rules):
+        due = walkin_orders.price_due(order)
+        typed = order.get("changed_total") is not None and not order.get("rounding")  # test orders from before 17_07
+        lines.append((f"Total: EUR {due:,.2f}" + ("  (changed price)" if typed else ""), 18, True, 8))  # rounded: the amount only
+    else:
+        lines[-1] = lines[-1][:3] + (lines[-1][3] + 8,)  # the gap the total line left after itself, kept
     lines.append((f"Printed {when.day} {when:%b %Y, %H:%M}   ·   placed {order['created'][:10]}", 11, False, 16))
     lines.append(("Items", 13, True, 6))
     for i, item in enumerate(order["items"], start=1):

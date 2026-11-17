@@ -9,7 +9,8 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
 --------------------------------------------------------------------
 1. Get Quote: a small order (an A4 B&W document, 2 pages x 2) for a test customer. Place it, put a
    PDF in its folder, Print Jobs, Print now. The cover sheet comes out first: plain A4, black and white,
-   one side, with the name, phone, the number large, the total and the items. Then the document.
+   one side, with the name, phone, the number large and the items, and no prices anywhere on it
+   (Tesla, 2026-11-17). Then the document.
 2. A colour product (e.g. 100 business cards, a laid-out A4 PDF, confirm 13 sheets): it prints at
    actual size on the routed copier from the Bypass Tray, on the cover sheet's copier after it.
 3. Both sides on heavy paper (Silk 300, Both sides): fronts, then Print backs on the copier's block,
