@@ -16,6 +16,7 @@ from tkinter import messagebox, ttk
 
 import analyze
 import copier_queue
+import copy_counter
 import costs
 import filedrop
 import theme
@@ -36,7 +37,22 @@ def euro(x):
     return f"EUR {x:,.2f}"
 
 
-KEEP_QUESTION = "First order from this customer. Keep their details for loyalty and their own folder?"
+def rounding_buttons(parent, on_press, width=10):
+    """The six rounding buttons, shared by Get Quote / Add Email and the Copy counter so they can't drift apart
+    (Tesla, 2026-11-17: Up to 1 | 5 | 10 above, Down to 1 | 5 | 10 below, No rounding on the right over both rows).
+    on_press(mode or None). Returns (frame, {mode: button})."""
+    frame = ttk.Frame(parent)
+    buttons = {}
+    for mode, (text, way, step) in walkin_pricing.ROUNDINGS.items():
+        b = ttk.Button(frame, text=text, width=width, command=lambda m=mode: on_press(m))
+        b.grid(row=0 if way > 0 else 1, column=(1, 5, 10).index(step), padx=(0, 4), pady=(0, 3))
+        buttons[mode] = b
+    ttk.Button(frame, text="No rounding", command=lambda: on_press(None)).grid(
+        row=0, column=3, rowspan=2, sticky="ns", padx=(8, 0), pady=(0, 3))
+    return frame, buttons
+
+
+KEEP_QUESTION ="First order from this customer. Keep their details for loyalty and their own folder?"
 
 
 def ask_keep(parent):
@@ -256,7 +272,7 @@ class WalkinScreen(Screen):
     """Three big buttons: Get Quote, Add Email, Print Jobs."""
 
     def __init__(self, ctx, on_back):
-        super().__init__(ctx, "Walk-in", on_back, size="1160x560")
+        super().__init__(ctx, "Walk-in", on_back, size="1160x720")
         self.warn = self.warnings(self.frame, 1)
         box = ttk.Frame(self.frame)
         box.grid(row=2, column=0, pady=(40, 0))
@@ -269,6 +285,12 @@ class WalkinScreen(Screen):
                                    "Add Email: an order that came by email.   Print Jobs: orders ready to print.   "
                                    "Customers: spending and loyalty.",
                   style="Small.TLabel").grid(row=3, column=0, pady=(30, 0))
+        # Copy counter (2026-11-17_10): centred below the row of four, the same size and style.
+        self.counter_btn = ttk.Button(self.frame, text="Copy counter", style="Walkin.TButton", width=11,
+                                      command=self.open_copy_counter)
+        self.counter_btn.grid(row=4, column=0, pady=(30, 0))
+        ttk.Label(self.frame, text="Copy counter: count copies made at the copier", style="Small.TLabel").grid(
+            row=5, column=0, pady=(12, 0))
         self.ready()
         self.poll()
 
@@ -290,6 +312,395 @@ class WalkinScreen(Screen):
     def open_customers(self):
         self.win.withdraw()
         CustomersScreen(self.ctx, on_back=self.show)
+
+    def open_copy_counter(self):
+        self.win.withdraw()
+        CopyCounterScreen(self.ctx, on_back=self.show)
+
+
+# ------------------------------------------------------------------ Copy counter (2026-11-17_10)
+
+class CopyCounterScreen(Screen):
+    """One panel per copier: Start counting, the copy type / paper / sides of the copies being made, extras, the
+    running total (screen only), rounding, Finish, Print receipt, Done, Cancel. The counting itself lives in
+    ctx.copy_counter (copy_counter.Manager), so it goes on when this window is closed (and after a restart)."""
+
+    TYPE_NAMES = list(copy_counter.TYPES)
+
+    def __init__(self, ctx, on_back):
+        super().__init__(ctx, "Copy counter", on_back, size="1500x900")
+        self.manager = ctx.copy_counter
+        self.panels = {}
+        self.live = {}  # copier -> the labels refresh_live updates
+        self.messages = {}  # copier -> a line for its panel (no answer, refused, …)
+        self.finishing = set()
+        self.reading = set()
+        body = ttk.Frame(self.frame)
+        body.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
+        self.frame.rowconfigure(2, weight=1)
+        for c, pid in enumerate(self.manager.printers):
+            body.columnconfigure(c, weight=1, uniform="copier")
+            box = ttk.LabelFrame(body, text=self.manager.label(pid), padding=10, style="Section.TLabelframe")
+            box.grid(row=0, column=c, sticky="nsew", padx=6)
+            self.panels[pid] = box
+        body.rowconfigure(0, weight=1)
+        for pid in self.panels:
+            self.build(pid)
+        self.ready()
+        self.win.after(1000, self.tick)
+
+    # -------------------------------------------------------------- helpers
+    def busy_text(self, pid):
+        """Why ORCA's own printing refuses Start counting on this copier, or None."""
+        label = self.manager.label(pid)
+        c = self.ctx.print_queue.copiers.get(pid, {"state": "idle"})
+        if c["state"] != "idle":
+            n = (c.get("orders") or ["?"])[0]
+            return f"{label} is busy printing #{n}: press Pages collected first."
+        ph = getattr(self.ctx, "printhub", None)
+        order = ph.busy_with(pid) if ph is not None else None
+        if order is not None:
+            return f"{label} is busy printing {order.number}: press Pages collected first."
+        return None
+
+    def in_background(self, pid, work, done):
+        """Run work() on a thread (reading a copier can take a moment); done(result or exception) on the Tk thread."""
+        box = {}
+
+        def run():
+            try:
+                box["value"] = work()
+            except Exception as e:  # CounterError, OSError: shown in the panel
+                box["value"] = e
+
+        def wait():
+            if "value" not in box:
+                self.win.after(100, wait)
+                return
+            try:
+                done(box["value"])
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
+        self.win.after(100, wait)
+
+    # -------------------------------------------------------------- one panel
+    def build(self, pid):
+        box = self.panels[pid]
+        for w in box.winfo_children():
+            w.destroy()
+        box.columnconfigure(0, weight=1)
+        counter = self.manager.counters.get(pid)
+        message = self.messages.get(pid, "")
+        if counter is None:
+            self.build_idle(box, pid, message)
+        elif counter.data["finished"]:
+            self.build_summary(box, pid, counter, message)
+        else:
+            self.build_counting(box, pid, counter, message)
+        theme.on_surface(box)
+
+    def build_idle(self, box, pid, message):
+        ttk.Label(box, text="Free", style="Big.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(box, text="Start counting", style="Print.TButton", command=lambda: self.start(pid)).grid(
+            row=1, column=0, sticky="w", pady=(10, 0))
+        if message:
+            ttk.Label(box, text=message, style="Bad.TLabel", wraplength=420, justify="left").grid(
+                row=2, column=0, sticky="w", pady=(10, 0))
+        if pid in self.messages and self.messages[pid].startswith(f"{self.manager.label(pid)} doesn't answer"):
+            ttk.Button(box, text="Type the copies instead", command=lambda: self.start(pid, typed=True)).grid(
+                row=3, column=0, sticky="w", pady=(8, 0))
+
+    def build_counting(self, box, pid, counter, message):
+        d = counter.data
+        r = 0
+        head = "Counting" if d["mode"] == "counter" else "Typing the copies (the copier didn't answer)"
+        ttk.Label(box, text=head, style="Big.TLabel").grid(row=r, column=0, sticky="w")
+        r += 1
+        types = ttk.Frame(box)
+        types.grid(row=r, column=0, sticky="w", pady=(8, 0))
+        var = tk.StringVar(value=d["current"]["type"])
+        for k, name in enumerate(self.TYPE_NAMES):
+            ttk.Radiobutton(types, text=name, value=name, variable=var,
+                            command=lambda v=var: self.change(pid, type=v.get())).grid(row=k // 2, column=k % 2,
+                                                                                      sticky="w", padx=(0, 14))
+        r += 1
+        pl = walkin_prices.current()
+        papers = [p for p in pl.papers if p != walkin_prices.LABEL_SHEET] or [copy_counter.FIRST_PAPER]
+        if copy_counter.FIRST_PAPER in papers:
+            papers.remove(copy_counter.FIRST_PAPER)
+            papers.insert(0, copy_counter.FIRST_PAPER)
+        row = ttk.Frame(box)
+        row.grid(row=r, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(row, text="Paper:").pack(side="left")
+        pvar = tk.StringVar(value=d["current"]["paper"])
+        cb = ttk.Combobox(row, textvariable=pvar, values=papers, state="readonly", width=24, font=FONT)
+        cb.pack(side="left", padx=6)
+        cb.bind("<<ComboboxSelected>>", lambda _: self.change(pid, paper=pvar.get()))
+        r += 1
+        sides = ttk.Frame(box)
+        sides.grid(row=r, column=0, sticky="w", pady=(6, 0))
+        svar = tk.StringVar(value=d["current"]["sides"])
+        for value, text in (("single", "One side"), ("double", "Both sides")):
+            ttk.Radiobutton(sides, text=text, value=value, variable=svar,
+                            command=lambda: self.change(pid, sides=svar.get())).pack(side="left", padx=(0, 14))
+        r += 1
+        if d["mode"] == "typed":
+            typed = ttk.Frame(box)
+            typed.grid(row=r, column=0, sticky="w", pady=(6, 0))
+            ttk.Label(typed, text="Copies made:").pack(side="left")
+            cvar = tk.StringVar()
+            ttk.Entry(typed, textvariable=cvar, width=8, font=FONT).pack(side="left", padx=6)
+            ttk.Button(typed, text="Add copies", command=lambda: self.add_typed(pid, cvar.get())).pack(side="left")
+            r += 1
+        live = self.live[pid] = {}
+        live["segs"] = self.panel_label(box, r, "")
+        r += 1
+        r = self.extras_block(box, r, pid, counter)
+        live["total"] = self.total_block(box, r, pid, counter, counter.priced())
+        r += 2
+        if d["mode"] == "counter":
+            live["last"] = ttk.Label(box, text="", style="Small.TLabel")
+            live["last"].grid(row=r, column=0, sticky="w")
+            r += 1
+        self.refresh_live(pid)
+        if message:
+            ttk.Label(box, text=message, style="Bad.TLabel", wraplength=420, justify="left").grid(
+                row=r, column=0, sticky="w", pady=(4, 0))
+            r += 1
+        buttons = ttk.Frame(box)
+        buttons.grid(row=r, column=0, sticky="w", pady=(10, 0))
+        finish = ttk.Button(buttons, text="Finishing…" if pid in self.finishing else "Finish", style="Print.TButton",
+                            command=lambda: self.finish(pid))
+        finish.pack(side="left")
+        if pid in self.finishing:
+            finish.state(["disabled"])
+        ttk.Button(buttons, text="Cancel", command=lambda: self.cancel(pid)).pack(side="left", padx=(8, 0))
+
+    def panel_label(self, box, r, text):
+        label = ttk.Label(box, text=text, justify="left", wraplength=440)
+        label.grid(row=r, column=0, sticky="w", pady=(10, 0))
+        return label
+
+    def total_text(self, priced):
+        total, due = priced["total"], priced["due"]
+        text = (f"Total: {euro(total)}" if abs(due - total) < 0.005 else
+                f"Total: {euro(due)} (rounded {'up' if due > total else 'down'} from {total:,.2f})")
+        if priced["problems"]:
+            text += "\n" + "\n".join(priced["problems"])
+        return text
+
+    def refresh_live(self, pid):
+        """The lines that change while counting (segments, total, Last read), without rebuilding the panel (so a
+        count being typed is not lost)."""
+        counter, live = self.manager.counters.get(pid), self.live.get(pid)
+        if counter is None or not live or counter.data["finished"]:
+            return
+        d = counter.data
+        try:
+            segs = [counter.segment_text(s) for s in counter.segments_now()]
+            if d["mode"] == "counter" and not counter.current_copies():
+                segs.append(f"{d['current']['type']}, {d['current']['paper']}, "
+                            f"{copy_counter.SIDES[d['current']['sides']]}: 0 copies so far")
+            live["segs"].config(text="\n".join(segs) or "No copies yet")
+            priced = counter.priced()
+            live["total"].config(text=self.total_text(priced),
+                                 style="Bad.TLabel" if priced["problems"] else "Head.TLabel")
+            if "last" in live:
+                live["last"].config(text=f"Last read {(d.get('last_time') or '')[11:19]}")
+        except tk.TclError:
+            pass
+
+    def extras_block(self, box, r, pid, counter):
+        pl = walkin_prices.current()
+        rows = copy_counter.extra_rows(pl)
+        f = ttk.Frame(box)
+        f.grid(row=r, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(f, text="Extra:").grid(row=0, column=0, sticky="w")
+        names = [f"{name} ({what})" for name, what in rows]
+        evar = tk.StringVar(value=names[0])
+        ttk.Combobox(f, textvariable=evar, values=names, state="readonly", width=26, font=FONT).grid(
+            row=0, column=1, sticky="w", padx=6)
+        nvar, svar = tk.StringVar(), tk.StringVar()
+        ttk.Label(f, text="how many:").grid(row=0, column=2, sticky="e")
+        ttk.Entry(f, textvariable=nvar, width=6, font=FONT).grid(row=0, column=3, sticky="w", padx=4)
+        ttk.Label(f, text="sheets per copy (spiral):").grid(row=1, column=1, columnspan=2, sticky="e")
+        ttk.Entry(f, textvariable=svar, width=6, font=FONT).grid(row=1, column=3, sticky="w", padx=4, pady=(4, 0))
+        ttk.Button(f, text="Add", command=lambda: self.add_extra(pid, rows[names.index(evar.get())][0], nvar.get(),
+                                                                 svar.get())).grid(row=0, column=4, padx=(6, 0))
+        r += 1
+        for k, e in enumerate(counter.data["extras"]):
+            line = ttk.Frame(box)
+            line.grid(row=r, column=0, sticky="w")
+            extra = f" ({e['per_copy']} sheets per copy)" if e.get("per_copy") else ""
+            ttk.Label(line, text=f"{e['name']} x {e['count']}{extra}").pack(side="left")
+            ttk.Button(line, text="Remove", command=lambda i=k: self.remove_extra(pid, i)).pack(side="left", padx=8)
+            r += 1
+        return r
+
+    def total_block(self, box, r, pid, counter, priced):
+        f = ttk.Frame(box)
+        f.grid(row=r, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(f, text="Round the total:").grid(row=0, column=0, sticky="w")
+        rb, buttons = rounding_buttons(f, lambda m: self.set_rounding(pid, m), width=9)
+        rb.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        for mode, b in buttons.items():
+            b.state(["pressed"] if mode == counter.data.get("rounding") else ["!pressed"])
+        label = ttk.Label(box, text=self.total_text(priced), style="Bad.TLabel" if priced["problems"] else "Head.TLabel",
+                          justify="left", wraplength=440)
+        label.grid(row=r + 1, column=0, sticky="w", pady=(6, 0))
+        return label
+
+    def build_summary(self, box, pid, counter, message):
+        priced = counter.priced()
+        ttk.Label(box, text="Finished", style="Big.TLabel").grid(row=0, column=0, sticky="w")
+        lines = "\n".join(f"{t}   {euro(a)}" for t, a in priced["lines"]) or "No copies"
+        self.panel_label(box, 1, lines)
+        self.total_block(box, 2, pid, counter, priced)
+        r = 4
+        if message:
+            ttk.Label(box, text=message, style="Bad.TLabel", wraplength=420, justify="left").grid(
+                row=r, column=0, sticky="w", pady=(4, 0))
+            r += 1
+        buttons = ttk.Frame(box)
+        buttons.grid(row=r, column=0, sticky="w", pady=(10, 0))
+        pr = ttk.Button(buttons, text="Print receipt", command=lambda: self.print_receipt(pid))
+        pr.pack(side="left")
+        dn = ttk.Button(buttons, text="Done", style="Print.TButton", command=lambda: self.done(pid))
+        dn.pack(side="left", padx=(8, 0))
+        if priced["problems"]:
+            pr.state(["disabled"])
+            dn.state(["disabled"])
+
+    # -------------------------------------------------------------- actions
+    def start(self, pid, typed=False):
+        try:
+            self.manager.start(pid, self.busy_text(pid), typed=typed)
+            self.messages.pop(pid, None)
+        except ValueError as e:
+            self.messages[pid] = str(e)
+        except copy_counter.CounterError as e:
+            self.messages[pid] = f"{self.manager.label(pid)} doesn't answer ({e}). Type the copies instead?"
+        self.build(pid)
+
+    def change(self, pid, **what):
+        counter = self.manager.counters.get(pid)
+        if counter is None:
+            return
+        try:
+            counter.change(**what)
+            self.messages.pop(pid, None)
+        except copy_counter.CounterError as e:
+            self.messages[pid] = f"Couldn't read the counter ({e}): the change wasn't made. Try again."
+        self.build(pid)
+
+    def add_typed(self, pid, text):
+        counter = self.manager.counters[pid]
+        try:
+            if not text.strip().isdigit():
+                raise ValueError("Copies made: a whole number (a count, not money).")
+            counter.add_typed(int(text))
+            self.messages.pop(pid, None)
+        except ValueError as e:
+            self.messages[pid] = str(e)
+        self.build(pid)
+
+    def add_extra(self, pid, name, count, per_copy):
+        counter = self.manager.counters[pid]
+        try:
+            if not count.strip().isdigit():
+                raise ValueError(f"{name}: how many is a whole number (a count, not money).")
+            if per_copy.strip() and not per_copy.strip().isdigit():
+                raise ValueError("Sheets per copy: a whole number.")
+            counter.add_extra(name, int(count), int(per_copy) if per_copy.strip() else None)
+            self.messages.pop(pid, None)
+        except ValueError as e:
+            self.messages[pid] = str(e)
+        self.build(pid)
+
+    def remove_extra(self, pid, index):
+        self.manager.counters[pid].remove_extra(index)
+        self.build(pid)
+
+    def set_rounding(self, pid, mode):
+        self.manager.counters[pid].set_rounding(mode)
+        self.build(pid)
+
+    def finish(self, pid):
+        counter = self.manager.counters.get(pid)
+        if counter is None or pid in self.finishing:
+            return
+        self.finishing.add(pid)
+        self.build(pid)
+
+        def done(result):
+            self.finishing.discard(pid)
+            if isinstance(result, Exception):
+                self.messages[pid] = f"Couldn't read the counter ({result}). Press Finish again."
+            elif result is False:
+                self.messages[pid] = "The counter kept changing for 30 seconds: the last reading was used."
+            else:
+                self.messages.pop(pid, None)
+            self.build(pid)
+
+        self.in_background(pid, counter.finish, done)
+
+    def cancel(self, pid):
+        if not messagebox.askyesno(parent=self.win, title="ORCA", message="Stop counting and throw these copies away?"):
+            return
+        self.manager.cancel(pid)
+        self.messages.pop(pid, None)
+        self.build(pid)
+
+    def print_receipt(self, pid):
+        counter = self.manager.counters[pid]
+        priced = counter.priced()
+        path = walkin_print.WORK_DIR / f"copy_counter_{pid}.pdf"
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def done(result):
+            if isinstance(result, Exception):
+                messagebox.showwarning(parent=self.win, title="ORCA", message=f"The receipt didn't print.\n\n{result}")
+            else:
+                self.messages[pid] = "Receipt sent to the receipt printer."
+                self.build(pid)
+
+        self.in_background(pid, lambda: copy_counter.print_receipt(counter, priced, self.ctx.rules, path), done)
+
+    def done(self, pid):
+        try:
+            self.manager.done(pid)
+        except ValueError as e:
+            messagebox.showwarning(parent=self.win, title="ORCA", message=str(e))
+            return
+        self.messages.pop(pid, None)
+        self.build(pid)
+
+    def tick(self):
+        """Every few seconds: read every counting copier again (on a thread) and show it."""
+        try:
+            if not self.win.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        for pid, counter in list(self.manager.counters.items()):
+            if counter.data["finished"] or counter.data["mode"] != "counter" or pid in self.reading \
+                    or pid in self.finishing:
+                continue
+            self.reading.add(pid)
+
+            def done(result, p=pid):
+                self.reading.discard(p)
+                if isinstance(result, Exception):
+                    self.messages[p] = f"Couldn't read the counter ({result}): trying again."
+                elif self.messages.get(p, "").startswith("Couldn't read the counter"):
+                    self.messages.pop(p, None)
+                if p not in self.finishing:
+                    self.refresh_live(p)
+
+            self.in_background(pid, counter.poll, done)
+        self.win.after(copy_counter.poll_seconds(self.ctx.rules) * 1000, self.tick)
 
 
 # ------------------------------------------------------------------ Customers (2026-11-17_07)
@@ -621,15 +1032,8 @@ class QuoteScreen(Screen):
         # Prices are fixed: staff can only round the total (Tesla, 2026-11-17).
         ttk.Label(totals, text="Round the total:").grid(row=2, column=1, sticky="e", pady=(6, 0))
         self.rounding = None
-        self.round_buttons = {}
-        rb = ttk.Frame(totals)
+        rb, self.round_buttons = rounding_buttons(totals, self.set_rounding)
         rb.grid(row=2, column=2, sticky="w", padx=6, pady=(6, 0))
-        for k, (rmode, (text, _, _)) in enumerate(walkin_pricing.ROUNDINGS.items()):
-            b = ttk.Button(rb, text=text, width=10, command=lambda m=rmode: self.set_rounding(m))
-            b.grid(row=k % 2, column=k // 2, padx=(0, 4), pady=(0, 3))  # Down to … above Up to …
-            self.round_buttons[rmode] = b
-        ttk.Button(rb, text="No rounding", command=lambda: self.set_rounding(None)).grid(
-            row=0, column=3, rowspan=2, sticky="ns", padx=(8, 0), pady=(0, 3))
         self.total_label = ttk.Label(totals, text="", style="Big.TLabel")
         self.total_label.grid(row=3, column=0, columnspan=4, sticky="e", pady=(8, 0))
         self.problems = ttk.Label(right, text="", style="Bad.TLabel", justify="left", wraplength=760)

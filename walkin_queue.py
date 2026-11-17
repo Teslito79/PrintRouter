@@ -95,6 +95,7 @@ class Run:
         self.load_file()
         # A copier with a walk-in batch is busy: colour goes to the IM C4510 instead of the IM C3000.
         shared_jobs.busy_sources.append(lambda: {p for p, c in self.copiers.items() if c["state"] != "idle"})
+        copier_queue.RELEASED.append(self.start_next)  # a copier the Copy counter let go carries on
         threading.Thread(target=self._send_worker, daemon=True).start()
 
     # -------------------------------------------------------------- the file
@@ -221,7 +222,7 @@ class Run:
         """What the copier is doing, for its block in Print Jobs."""
         c = self.copiers[pid]
         if c["state"] == "idle":
-            return "Free"
+            return copier_queue.HELD_TEXT if copier_queue.held(pid) else "Free"
         orders = c["orders"]
         held = f"{c.get('customer', '?')}: {', '.join(f'#{n}' for n in orders)}" + (
             f" ({len(orders)} orders)" if len(orders) > 1 else "")
@@ -310,7 +311,7 @@ class Run:
 
     def start_next(self, pid, auto=False):
         """Send this copier's first waiting batch if printing is ON and the copier is free."""
-        if not self.running or self.copiers[pid]["state"] != "idle":
+        if not self.running or self.copiers[pid]["state"] != "idle" or copier_queue.held(pid):
             return
         lst = self.batches(pid)
         if not lst:
@@ -477,6 +478,8 @@ class Run:
         waiting = sorted(self.waiting_parts(order))
         for pid in waiting:
             c = self.copiers[pid]
+            if copier_queue.held(pid):
+                return f"{self.printers[pid]['label']} is held: the copy counter is running on it."
             if c["state"] != "idle":
                 who = c.get("customer", "another customer").rstrip(".")
                 return (f"{self.printers[pid]['label']} is busy with {who}. "

@@ -628,7 +628,7 @@ def finish(order, cancelled=False):
 # ------------------------------------------------------------------ sales log and spending (2026-11-17_07)
 
 SALES_FILE = "sales_log.csv"
-SALES_HEAD = ["date", "order", "status", "items", "paid"]
+SALES_HEAD = ["date", "order", "status", "items", "paid", "source", "copier"]  # source, copier: 2026-11-17_10
 
 
 def sales_path():
@@ -651,28 +651,36 @@ def items_short(order):
 
 def write_sale(order):
     """One line in Walk-in\\sales_log.csv for every collected or cancelled walk-in order, with no name: the date,
-    the number, collected / cancelled, the items in short and the amount paid. Written safely (temp file, rename)."""
+    the number, collected / cancelled, the items in short and the amount paid."""
+    cancelled = order["status"] == "cancelled"
+    day = (order["times"].get("cancelled" if cancelled else "collected") or now())[:10]
+    write_sales_line({"date": day, "order": f"#{order['number']}", "status": "cancelled" if cancelled else "collected",
+                      "items": items_short(order), "paid": f"{0 if cancelled else price_due(order):.2f}",
+                      "source": "walk-in order", "copier": ""})
+
+
+def write_sales_line(row):
+    """Add one line to sales_log.csv (columns SALES_HEAD; a file from before the source and copier columns gets them,
+    its lines marked walk-in order). Written safely (temp file, rename)."""
     import csv
     import io
     path = sales_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        old = path.read_text(encoding="utf-8-sig")
-    except OSError:
-        old = ""
-    buf = io.StringIO()
-    w = csv.writer(buf, lineterminator="\r\n")
-    if not old.strip():
-        w.writerow(SALES_HEAD)
-    cancelled = order["status"] == "cancelled"
-    day = (order["times"].get("cancelled" if cancelled else "collected") or now())[:10]
-    w.writerow([day, f"#{order['number']}", "cancelled" if cancelled else "collected", items_short(order),
-                f"{0 if cancelled else price_due(order):.2f}"])
-    if old and not old.endswith("\n"):
-        old += "\r\n"
-    tmp = path.with_name(f".{path.name}.tmp")
-    tmp.write_text(old + buf.getvalue(), encoding="utf-8-sig")
-    os.replace(tmp, path)
+    with LOCK:
+        rows = read_sales()
+        for r in rows:
+            r.setdefault("source", "walk-in order")
+            r["source"] = r.get("source") or "walk-in order"
+            r["copier"] = r.get("copier") or ""
+        rows.append(row)
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=SALES_HEAD, lineterminator="\r\n", extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in SALES_HEAD})
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(buf.getvalue(), encoding="utf-8-sig")
+        os.replace(tmp, path)
 
 
 def read_sales():

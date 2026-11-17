@@ -173,6 +173,40 @@ def make_receipt_pdf(path, prices, entries, when=None):
     return total
 
 
+def lines_pdf(path, header, rows, total=None):
+    """The walk-in Copy counter's receipt (2026-11-17_10): the header lines centred (date and time, the copier), then
+    one row per line (left text, right text or ""), then TOTAL only when given. No shop name, no ORCA, no PrintHub
+    (Tesla's choice). Drawn like make_receipt_pdf: 203 dpi, 72 mm wide, one PDF page cut to what was used."""
+    small, normal, big = _font(22), _font(26), _font(40, True)
+    usable = WIDTH_PX - 2 * MARGIN_PX
+    img = Image.new("L", (WIDTH_PX, 400 + 50 * len(rows)), 255)
+    d = ImageDraw.Draw(img)
+    y = 10
+    for text in header:
+        text = _fit(d, text, normal, usable)
+        d.text(((WIDTH_PX - d.textlength(text, font=normal)) / 2, y), text, font=normal, fill=0)
+        y += normal.size + 10
+    d.line((MARGIN_PX, y + 4, WIDTH_PX - MARGIN_PX, y + 4), fill=0, width=2)
+    y += 16
+    for left, right in rows:
+        rw = d.textlength(right, font=small) if right else 0
+        d.text((MARGIN_PX, y), _fit(d, left, small, usable - rw - 12), font=small, fill=0)
+        if right:
+            d.text((WIDTH_PX - MARGIN_PX - rw, y), right, font=small, fill=0)
+        y += small.size + 10
+    if total is not None:
+        d.line((MARGIN_PX, y + 4, WIDTH_PX - MARGIN_PX, y + 4), fill=0, width=2)
+        y += 16
+        rw = d.textlength(total, font=big)
+        d.text((MARGIN_PX, y), "TOTAL", font=big, fill=0)
+        d.text((WIDTH_PX - MARGIN_PX - rw, y), total, font=big, fill=0)
+        y += big.size + 10
+    y += 30  # feed past the tear bar
+    img = img.crop((0, 0, WIDTH_PX, y))
+    img.save(path, "PDF", resolution=DPI)
+    return path
+
+
 if __name__ == "__main__":
     # Make a sample receipt, for testing the XP-80C.
     import json

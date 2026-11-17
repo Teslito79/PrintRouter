@@ -270,6 +270,26 @@ def classify_counters(names):
     return out
 
 
+def copier_address(printers, pid, settings=None):
+    """(address, where it came from) of a copier: typed in the Data screen, else the queue's port."""
+    settings = settings or load_settings()
+    typed = settings["addresses"].get(pid)
+    if typed:
+        return typed, "typed in the Data screen"
+    found = queue_address(printers[pid]["queue"])
+    return (found, "from the Windows queue's port") if found else (None, "not found")
+
+
+def read_total(address, community="public", timeout=TIMEOUT):
+    """The copier's total counter (prtMarkerLifeCount), read-only, or None when it doesn't answer (Copy counter,
+    2026-11-17_10)."""
+    try:
+        value = Snmp(address, community, timeout=timeout).get([OID_LIFE_COUNT]).get(OID_LIFE_COUNT)
+    except (OSError, ValueError):
+        return None
+    return int(value) if isinstance(value, int) else None
+
+
 def read_copier(address, community="public", timeout=TIMEOUT):
     """Everything one copier answers: {"ok", "version", "model", "counters", "toners", "raw", "error"}.
     counters: total / black / colour, each an int or None (not given). toners: colour -> percent or None."""
@@ -564,12 +584,7 @@ class TonerWatch:
 
     def address(self, pid, settings=None):
         """(address, where it came from): typed in the Data screen, else the queue's port."""
-        settings = settings or load_settings()
-        typed = settings["addresses"].get(pid)
-        if typed:
-            return typed, "typed in the Data screen"
-        found = queue_address(self.printers[pid]["queue"])
-        return (found, "from the Windows queue's port") if found else (None, "not found")
+        return copier_address(self.printers, pid, settings)
 
     def _loop(self):
         while not self.stopped:

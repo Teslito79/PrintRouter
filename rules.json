@@ -11,7 +11,9 @@
     "printers max_gsm: the heaviest paper a copier takes (Tesla, 2026-11-13: IM C4510 up to 350 gsm, IM C3000 up to 300 gsm).",
     "A heavier paper goes to the first copier listed that takes it. Only website product papers name their gsm.",
     "A rule's if_busy: the copier used instead when the rule's copier is busy with another ORCA job (colour: IM C3000 first, then IM C4510).",
-    "walkin_paper_prices: Prices on walk-in cover sheets. false while testing (Tesla, 2026-11-17); set to true when going live."
+    "walkin_paper_prices: Prices on walk-in cover sheets. false while testing (Tesla, 2026-11-17); set to true when going live.",
+    "copy_counter_a3_counts_as: how much one A3 page adds to a copier's total counter (1 or 2 on some Ricoh settings). To be checked at work (2026-11-17_10): A3 copies in the Copy counter divide the counter's difference by it.",
+    "copy_counter_poll_seconds: how often the Copy counter reads a counting copier's counter. Copy counter receipts show money only when walkin_paper_prices is true."
   ],
   "printers": {
     "C4510": { "queue": "RICOH IM C4510 PCL 6",   "label": "IM C4510", "max_gsm": 350 },
@@ -48,6 +50,8 @@
   "a5_layout": "same_page_twice",
   "confirm_above_sheets": 100,
   "walkin_paper_prices": false,
+  "copy_counter_a3_counts_as": 1,
+  "copy_counter_poll_seconds": 5,
   "rotate_sort": {
     "_help": "Ticked by hand per file (A4 only). Copies take turns between these trays (A4 portrait / A4 landscape), so each copy lies crosswise on the one before. Keeps alternating across all files in one print run.",
     "printer": "C4510",

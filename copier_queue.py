@@ -10,6 +10,30 @@ from tkinter import messagebox
 # A copier taken by a part (sending, sent and not collected yet, waiting for Print backs, failed or interrupted).
 BUSY = ("sending", "turn", "sent", "failed", "interrupted")
 
+# Copiers held by the walk-in Copy counter (2026-11-17_10): while a copier's counter runs, neither queue sends
+# anything to it. Releasing it lets both queues carry on by themselves (the callbacks in RELEASED).
+HELD_TEXT = "Held: copy counter running"
+HELD = set()
+RELEASED = []  # functions(copier id) called when a copier is let go
+
+
+def held(pid):
+    return pid in HELD
+
+
+def hold(pid):
+    HELD.add(pid)
+
+
+def release(pid):
+    if pid in HELD:
+        HELD.discard(pid)
+        for callback in list(RELEASED):
+            try:
+                callback(pid)
+            except Exception:
+                pass
+
 
 def run_text(running, what="order"):
     """The run line under Start / Stop printing orders."""

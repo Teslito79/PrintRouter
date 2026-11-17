@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 import cleanup
+import copy_counter
 import costs
 import counter
 import jobs
@@ -60,6 +61,8 @@ class MainMenu:
         # copier, Start / Stop printing orders, Pages collected) lives here, so it carries on behind other screens.
         self.preparer = walkin_print.Preparer()
         self.print_queue = walkin_queue.Run(self.jobs, self.rules, self.preparer)
+        # Copy counter (2026-11-17_10): one counter per copier; a running one goes on after a restart (copier held).
+        self.copy_counter = copy_counter.Manager(self.rules, self.jobs)
         # Open walk-in orders whose product folders lack W100-2.cdr or Options.txt get them (never overwritten).
         threading.Thread(target=walkin_orders.prepare_all, args=(self.rules,), daemon=True).start()
         self.printhub = None

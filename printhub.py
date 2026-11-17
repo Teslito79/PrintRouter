@@ -150,6 +150,7 @@ class PrintHubView:
         # A copier taken by an order (sending, sent and not collected yet, waiting for Print backs,
         # failed or interrupted) is busy: colour goes to the IM C4510 instead of the IM C3000.
         self.jobs.busy_sources.append(lambda: {pid for pid in self.printers if self.busy_with(pid)})
+        copier_queue.RELEASED.append(self.released)  # a copier the Copy counter let go carries on
 
         self.win = tk.Toplevel(root)
         self._build()
@@ -592,7 +593,7 @@ class PrintHubView:
 
     def start_next(self, printer, only=None):
         """Send the next waiting order to this copier, if it is free (only: just this order, if it waits)."""
-        if not self.running or self.busy_with(printer):
+        if not self.running or self.busy_with(printer) or copier_queue.held(printer):
             return
         waiting = self.queue(printer)
         if only is not None:
@@ -711,6 +712,17 @@ class PrintHubView:
                                  else ("doc_sent", number, printer, name))
             else:
                 self.results.put(("part_sent", number, printer))
+
+    def released(self, printer):
+        """The Copy counter let this copier go: its next order starts if printing is ON (only for the open view; an
+        older closed one stays quiet)."""
+        if not self.is_open():
+            return
+        self.start_next(printer)
+        try:
+            self.refresh()
+        except Exception:
+            pass  # the window may be closed
 
     def collected(self, printer):
         """The pages were taken off this copier: free it and start its next order."""
@@ -907,7 +919,7 @@ class PrintHubView:
             order = self.busy_with(pid)
             buttons = []
             if order is None:
-                text = "Free"
+                text = copier_queue.HELD_TEXT if copier_queue.held(pid) else "Free"
             else:
                 part = self.status_of(order)["parts"][pid]
                 state = part["state"]

@@ -47,3 +47,9 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    so 64 x your A4 colour copy price + 32 x the Silk 300 A4 sheet price + 8 x the price per cut. Then a
    document: 10 pages, both sides, 2 copies, B&W: 20 copies + 10 sheets of Normal 80. ORCA's working
    lines under each item and its prices must match your paper sums.
+12. Copy counter: Walk-in > Copy counter, Start counting on the IM C4510 (if it says the copier doesn't
+   answer, note that and use Type the copies instead). Make 2 A4 B&W copies by hand, choose A4 colour,
+   make 1, then Finish: the panel shows 2 A4 B&W and 1 A4 colour. Print receipt: it prints on the XP-80C
+   with the date, the copier and the lines, no shop name and (for now) no prices. Done.
+   Then Start counting again, choose A3 B&W, make 1 A3 copy and look at the count: did it go up by 1 or
+   by 2? Write it down (for copy_counter_a3_counts_as in rules.json), then Cancel.
