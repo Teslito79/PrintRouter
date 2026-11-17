@@ -556,13 +556,32 @@ class OrderList(Screen):
         return box
 
     def item_state(self, order, item):
+        if item["kind"] == "product":
+            return self.product_state(order, item)
         f = wo.item_file(order, item)
         if f is None:
-            return (f"waiting for the {'PDF' if item['kind'] == 'product' else 'file'} in “{item['folder']}”", "Warn.TLabel")
-        if item["kind"] == "product" and not item.get("sheets"):
-            return (f"{f.name}: confirm the sheet count", "Warn.TLabel")
-        extra = f", {item['sheets']} sheets" if item["kind"] == "product" else ""
-        return (f"✓ {f.name}{extra}", "Good.TLabel")
+            return (f"waiting for the file in “{item['folder']}”", "Warn.TLabel")
+        return (f"✓ {f.name}", "Good.TLabel")
+
+    def product_state(self, order, item):
+        """Waiting for the customer's file, for layout, for Layout done; or ready (only W100-2.pdf prints)."""
+        name = wo.stem(order, wo.item_index(order, item))
+        customer = [p.name for p in wo.customer_files(order, item)]
+        files = f" · customer files: {', '.join(customer)}" if customer else ""
+        state, text, stamp = wo.sheet_state(order, item)
+        if state == "none":
+            if not customer:
+                return (f"Waiting for the customer's file (put it in “{item['folder']}”)", "Warn.TLabel")
+            return (f"Waiting for layout: lay it out in {name}.cdr and export {name}.pdf{files}", "Warn.TLabel")
+        if state == "saving":
+            return (text + files, "Small.TLabel")
+        if state == "bad":
+            return (text + files, "Bad.TLabel")
+        if not wo.laid_out(order, item):
+            again = item.get("stamp") and item.get("sheets")
+            return (f"{name}.pdf {'changed: press Layout done again' if again else 'found: press Layout done'}{files}",
+                    "Warn.TLabel")
+        return (f"✓ {name}.pdf, {item['sheets']} sheets{files}", "Good.TLabel")
 
     def open_folder(self, order):
         try:
@@ -709,7 +728,7 @@ class PrintJobsScreen(OrderList):
 
     def item_state(self, order, item):
         f = wo.item_file(order, item)
-        if f is None or (item["kind"] == "product" and not item.get("sheets")):
+        if f is None or (item["kind"] == "product" and not wo.laid_out(order, item)):
             return super().item_state(order, item)
         prepared = self.ctx.preparer.get(order, item)
         if prepared is None:
@@ -862,8 +881,9 @@ class OrdersScreen(OrderList):
     def buttons(self, order):
         out = [("Open folder", lambda: self.open_folder(order), None)]
         for i, item in enumerate(order["items"]):
-            if item["kind"] == "product" and wo.item_file(order, item) and not item.get("sheets"):
-                out.insert(0, (f"Sheets for item {i + 1}…", lambda k=i: SheetsDialog(self, order, k), "Print.TButton"))
+            if (item["kind"] == "product" and wo.sheet_state(order, item)[0] in ("ok", "bad")
+                    and not wo.laid_out(order, item)):
+                out.insert(0, (f"Layout done (item {i + 1})…", lambda k=i: SheetsDialog(self, order, k), "Print.TButton"))
         if order["status"] == "printed":
             out.insert(0, ("Ready for pickup", lambda: self.ready_for_pickup(order), "Print.TButton"))
         out += [("Change price", lambda: self.change_price(order), None),
@@ -930,7 +950,8 @@ class PriceDialog:
 
 
 class SheetsDialog:
-    """Confirm a product item's sheet count: suggested from pieces per sheet, as PrintHub's Layout done."""
+    """Layout done for a product item: the sheet count for W100-2.pdf, suggested from pieces per sheet, as
+    PrintHub's Layout done. Only the exported print sheet is checked (A4 or A3)."""
 
     def __init__(self, screen, order, index):
         self.screen, self.order, self.index = screen, order, index
@@ -942,7 +963,7 @@ class SheetsDialog:
         per = wo.pieces_for(screen.ctx.rules, cut, paper) if paper else None
         suggest = math.ceil(item["qty"] / per) if per else ""
         self.dlg = dlg = tk.Toplevel(screen.win)
-        dlg.title(f"ORCA - #{order['number']} item {index + 1}")
+        dlg.title(f"ORCA - #{order['number']} item {index + 1}: Layout done")
         dlg.transient(screen.win)
         f = ttk.Frame(dlg, padding=18)
         f.grid()
@@ -975,8 +996,6 @@ class SheetsDialog:
         if not t.isdigit() or not 1 <= int(t) <= 9999:
             self.error.config(text="A whole number from 1 to 9999.")
             return
-        self.order["items"][self.index]["sheets"] = int(t)
-        wo.save_order(self.order)
-        wo.refresh(self.order)
+        wo.layout_done(self.order, self.order["items"][self.index], int(t))
         self.screen.signature = None
         self.dlg.destroy()

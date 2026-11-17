@@ -296,6 +296,7 @@ def place(items, priced, customer, source, loyalty_line, changed_total=None):
                  "times": {"placed": now(), "printed": None, "ready": None, "collected": None, "cancelled": None},
                  "paid": None, "_folder": folder}
         save_order(order)
+        prepare_products(order)
         return order
 
 
@@ -303,42 +304,91 @@ def price_due(order):
     return order["changed_total"] if order.get("changed_total") is not None else order["total"]
 
 
-def item_file(order, item):
-    """The file staff dropped into the item's subfolder (documents: any accepted type; products: a PDF), or None."""
+def stem(order, index):
+    """'W100-2': the CorelDRAW file and the print sheet of order #100, item 2 (no #: CorelDRAW and some Windows
+    tools handle it badly)."""
+    return f"W{order['number']}-{index}"
+
+
+def item_index(order, item):
+    return order["items"].index(item) + 1
+
+
+def _files(order, item):
     folder = order["_folder"] / item["folder"]
     try:
-        files = sorted(p for p in folder.iterdir() if p.is_file() and not p.name.startswith((".", "~")))
+        return sorted(p for p in folder.iterdir() if p.is_file() and not p.name.startswith((".", "~")))
     except OSError:
-        return None
+        return []
+
+
+def item_file(order, item):
+    """The file that prints: documents, the file staff dropped in (any accepted type); products, only the exported
+    print sheet W100-2.pdf (None until it is there)."""
     if item["kind"] == "product":
-        files = [p for p in files if p.suffix.lower() == ".pdf"]
-    else:
-        files = [p for p in files if p.suffix.lower() in DOC_TYPES]
+        pdf = order["_folder"] / item["folder"] / f"{stem(order, item_index(order, item))}.pdf"
+        return pdf if pdf.is_file() else None
+    files = [p for p in _files(order, item) if p.suffix.lower() in DOC_TYPES]
     return files[0] if files else None
+
+
+def customer_files(order, item):
+    """A product item's customer files: everything except ORCA's Options.txt, the .cdr and the print sheet."""
+    own = {f"{stem(order, item_index(order, item))}{ext}".lower() for ext in (".cdr", ".pdf")} | {"options.txt"}
+    return [p for p in _files(order, item) if p.name.lower() not in own]
+
+
+def sheet_state(order, item):
+    """For a product item: ("none" | "saving" | "bad" | "ok", text, stamp). Only W100-2.pdf is checked, and not
+    while it was changed in the last seconds (CorelDRAW may still be writing it), as in PrintHub."""
+    import time
+    import orders as ph_orders
+    path = item_file(order, item)
+    name = f"{stem(order, item_index(order, item))}.pdf"
+    if path is None:
+        return "none", "", None
+    try:
+        st = path.stat()
+    except OSError:
+        return "none", "", None
+    stamp = [st.st_size, st.st_mtime_ns]
+    if 0 <= time.time() - st.st_mtime < ph_orders.SAVING_SECONDS:
+        return "saving", f"{name} is being saved…", stamp
+    paper, info = pdf_sheet(path)
+    if paper is None:
+        return "bad", f"{name}: {info}", stamp
+    return "ok", paper, stamp
+
+
+def laid_out(order, item):
+    """True when Layout done was pressed for the print sheet as it is now (a changed PDF needs it again)."""
+    state, _, stamp = sheet_state(order, item)
+    return state == "ok" and bool(item.get("sheets")) and item.get("stamp") == stamp
 
 
 def missing(order):
     """What an order still needs before it can print (empty: ready)."""
     out = []
     for i, item in enumerate(order["items"], start=1):
-        f = item_file(order, item)
-        if f is None:
-            out.append(f"item {i}: no {'PDF' if item['kind'] == 'product' else 'file'} in “{item['folder']}”")
-        elif item["kind"] == "product" and not item.get("sheets"):
-            out.append(f"item {i}: confirm the sheet count")
+        if item["kind"] == "document":
+            if item_file(order, item) is None:
+                out.append(f"item {i}: no file in “{item['folder']}”")
+        elif not laid_out(order, item):
+            out.append(f"item {i}: waiting for layout")
     return out
 
 
-def refresh(order):
-    """Note each item's file and move the order between waiting and ready_to_print (saves when it changed)."""
+def refresh(order, rules=None):
+    """Note each item's file, give product items their CorelDRAW file and Options.txt if missing (older orders),
+    and move the order between waiting and ready_to_print (saves when it changed)."""
+    if order["status"] in ("waiting", "ready_to_print"):
+        prepare_products(order, rules)
     changed = False
     for item in order["items"]:
         f = item_file(order, item)
         name = f.name if f else None
         if item.get("file") != name:
             item["file"], changed = name, True
-            if item["kind"] == "product":
-                item["sheets"] = None  # a new PDF: the sheet count is confirmed again
     if order["status"] in ("waiting", "ready_to_print"):
         status = "ready_to_print" if not missing(order) else "waiting"
         if status != order["status"]:
@@ -346,6 +396,95 @@ def refresh(order):
     if changed:
         save_order(order)
     return order
+
+
+def layout_done(order, item, sheets):
+    """Layout done: the sheet count for the print sheet as it is now."""
+    item["sheets"] = int(sheets)
+    item["stamp"] = sheet_state(order, item)[2]
+    save_order(order)
+    refresh(order)
+
+
+# ------------------------------------------------------------------ CorelDRAW file and Options.txt
+
+_RULES = {}
+
+
+def _rules(rules=None):
+    if rules is not None:
+        return rules
+    key = str(routing.app_dir())
+    if key not in _RULES:
+        _RULES[key] = routing.load_json("rules.json")
+    return _RULES[key]
+
+
+def product_doc(order, index, item):
+    """The item as an orders.Document, so the template, pieces and tray lines are worked out as PrintHub does."""
+    import orders as ph_orders
+    import walkin_catalogue as cat
+    import walkin_pricing
+    p = walkin_pricing.product_of(item)
+    doc = ph_orders.Document(str(index), order["_folder"] / item["folder"])
+    doc.kind = "product"
+    doc.job = {"product": p["id"], "name": p["name"], "quantity": item["qty"],
+               "cut_mm": list(cat.CUT_MM.get(cat.size_of(p, item["picks"]), (0, 0))),
+               "options": {o["label"]: o["choices"][item["picks"].get(o["key"], 0)] for o in p["options"]}}
+    return doc
+
+
+def options_text(order, index, item, doc, template_line, pieces, rules):
+    """Options.txt for a walk-in product item, in the style of PrintHub's."""
+    import orders as ph_orders
+    import product_files
+    c = order["customer"]
+    name = stem(order, index)
+    lines = [f"Order #{order['number']}   item {index}   {order['source']}   "
+             f"placed {order['created'][:16].replace('T', ' ')}",
+             "Customer: " + (" · ".join(x for x in (c.get("name"), c.get("phone"), c.get("email")) if x) or "-"), ""]
+    lines.append(f"{doc.job['name']}   quantity {item['qty']}")
+    lines += [f"  {line}" for line in ph_orders.product_lines(doc) + product_files.tray_lines(doc, rules)]
+    lines += ["", template_line]
+    if pieces:
+        lines.append(pieces)
+    lines += ["", f"Put the customer's design in this folder. Lay it out in {name}.cdr, export {name}.pdf into this "
+                  f"folder, then press Layout done in Walk-in."]
+    return "\n".join(lines) + "\n"
+
+
+def prepare_products(order, rules=None):
+    """Each product item's folder gets W100-2.cdr (the template PrintHub would choose) and Options.txt, once:
+    never over an existing file. A missing template (blank.cdr too) leaves only Options.txt, which says so."""
+    import orders as ph_orders
+    import product_files
+    rules = _rules(rules)
+    templates = ph_orders.templates_dir(rules)
+    for index, item in enumerate(order["items"], start=1):
+        if item["kind"] != "product":
+            continue
+        folder = order["_folder"] / item["folder"]
+        if not folder.is_dir():
+            continue
+        name = stem(order, index)
+        cdr, options = folder / f"{name}.cdr", folder / "Options.txt"
+        if cdr.exists() and options.exists():
+            continue
+        doc = product_doc(order, index, item)
+        template, line = product_files.choose_template(doc, templates)
+        if template is not None:
+            product_files.write_once(cdr, template=template)
+        product_files.write_once(options, text=options_text(order, index, item, doc, line,
+                                                            product_files.pieces_line(doc, rules), rules))
+
+
+def prepare_all(rules=None):
+    """At start: open orders whose product folders lack the CorelDRAW file or Options.txt get them."""
+    for order in list_open():
+        try:
+            prepare_products(order, rules)
+        except Exception:
+            continue
 
 
 def set_status(order, status):

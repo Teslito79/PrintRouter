@@ -19,6 +19,7 @@ import routing
 import sync
 import theme
 import toners
+import walkin_orders
 import walkin_print
 import walkin_screens
 
@@ -57,6 +58,8 @@ class MainMenu:
         # Walk-in orders: their files are checked and their prints sent in the background.
         self.preparer = walkin_print.Preparer()
         self.sender = walkin_print.Sender(self.jobs)
+        # Open walk-in orders whose product folders lack W100-2.cdr or Options.txt get them (never overwritten).
+        threading.Thread(target=walkin_orders.prepare_all, args=(self.rules,), daemon=True).start()
         self.printhub = None
 
         self.win = win = tk.Toplevel(root)

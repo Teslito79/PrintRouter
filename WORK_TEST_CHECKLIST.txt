@@ -16,3 +16,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    each back land on its own front, the right way up?
 4. Counter, Today: the test prints show under Walk-in with #<number> (the cover sheet as one A4
    B&W side). Then Orders: Ready for pickup, Collected; the folder is in Walk-in\Customers.
+5. Walk-in layout: Get Quote with 50 A5 flyers, Place order. The flyer folder has W<n>-1.cdr and
+   Options.txt. Drop the customer's design in (it shows as a customer file, 'Waiting for layout'),
+   lay it out in W<n>-1.cdr, export W<n>-1.pdf into the same folder, Orders > Layout done (25
+   sheets suggested), then Print Jobs > Print: only W<n>-1.pdf prints, at actual size.
