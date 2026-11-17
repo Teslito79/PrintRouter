@@ -29,5 +29,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    'Drop the file to print here' in the window that shows the number: it is copied into the item's
    folder (the original stays) and the order shows Ready to print. Drag a second PDF onto it: ORCA
    asks before replacing.
+   Then Add Email: drag a PDF from Explorer into the box next to Add item (Document chosen): it is
+   listed there and Pages shows its page count. Add item, Place order: the file is in the item's folder.
 8. One ORCA: double-click ORCA twice; only one opens (the second click brings it to the front).
    Minimise it and double-click again: it comes back.

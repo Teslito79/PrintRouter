@@ -13,6 +13,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+import analyze
 import copier_queue
 import costs
 import filedrop
@@ -64,6 +65,18 @@ def when(text):
 
 
 DROP_TEXT = {"product": "⤓  Drop the customer's file here", "document": "⤓  Drop the file to print here"}
+
+
+def pdf_pages(path):
+    """A PDF's page count, or None (not a PDF, or it can't be read)."""
+    if Path(path).suffix.lower() != ".pdf":
+        return None
+    try:
+        import jobs
+        with jobs.PDF_LOCK:
+            return analyze.page_count(Path(path)) or None
+    except Exception:
+        return None
 
 
 def drop_area(parent, kind, on_drop):
@@ -256,6 +269,7 @@ class QuoteScreen(Screen):
         self.mode = mode
         self.items = []
         self.drops = []  # per item: files dropped on it, copied into its folder at Place order
+        self.held = []  # files dropped in the box next to Add item, for the item on the form
         self.editing = None  # index of the item being edited
         self.option_vars = {}
         self.filled_from = None  # the customer whose details were filled in
@@ -275,14 +289,23 @@ class QuoteScreen(Screen):
         cb = ttk.Combobox(self.editor, textvariable=self.what, state="readonly", width=30, font=FONT,
                           values=["Document"] + [p["name"] for p in cat.PRODUCTS])
         cb.grid(row=0, column=1, sticky="w", pady=3)
-        cb.bind("<<ComboboxSelected>>", lambda _: self.build_options())
+        cb.bind("<<ComboboxSelected>>", lambda _: self.what_changed())
         self.options = ttk.Frame(self.editor)
         self.options.grid(row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
         buttons = ttk.Frame(self.editor)
-        buttons.grid(row=2, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        self.add_btn = ttk.Button(buttons, text="Add item", style="Print.TButton", command=self.add_item)
-        self.add_btn.pack(side="left")
-        self.cancel_edit_btn = ttk.Button(buttons, text="Cancel edit", command=self.cancel_edit)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="we", pady=(12, 0))
+        buttons.columnconfigure(1, weight=1)
+        left = ttk.Frame(buttons)
+        left.grid(row=0, column=0, sticky="nw")
+        self.add_btn = ttk.Button(left, text="Add item", style="Print.TButton", command=self.add_item)
+        self.add_btn.pack(anchor="w")
+        self.cancel_edit_btn = ttk.Button(left, text="Cancel edit", command=self.cancel_edit)
+        # The drop box: files for the item on the form, attached to it by Add item (2026-11-17_06).
+        self.box = tk.Frame(buttons, background=theme.FIELD, highlightthickness=2,
+                            highlightbackground=theme.PRIMARY, highlightcolor=theme.PRIMARY, padx=8, pady=6)
+        self.box.grid(row=0, column=1, sticky="nsew", padx=(12, 0))
+        self.box.columnconfigure(0, weight=1)
+        filedrop.target(self.box, lambda paths, x, y: self.drop_in_box(paths))
         self.editor_error = ttk.Label(self.editor, text="", style="Bad.TLabel", wraplength=380, justify="left")
         self.editor_error.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
@@ -300,7 +323,7 @@ class QuoteScreen(Screen):
         row.grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Button(row, text="Edit", command=self.edit_item).pack(side="left")
         ttk.Button(row, text="Remove", command=self.remove_item).pack(side="left", padx=(8, 0))
-        ttk.Label(row, text="Drop a customer's file onto an item: it goes into the order's folder at Place order.",
+        ttk.Label(row, text="Drop files in the box next to Add item, or onto an item in the list.",
                   style="Small.TLabel").pack(side="left", padx=(16, 0))
         filedrop.target(self.tree, self.drop_on_list)
         self.notes = ttk.Label(right, text="", style="Small.TLabel", justify="left", wraplength=760)
@@ -402,7 +425,65 @@ class QuoteScreen(Screen):
             for o in p["options"]:
                 self.option_vars[o["key"]] = combo(o["label"], o["choices"], o["choices"][picks.get(o["key"], 0)])
             self.option_vars["qty"] = combo("Quantity", [str(q) for q in p["qty"]], str(item["qty"] if item else p["qty"][0]))
+        self.show_box()
         theme.on_surface(self.editor)
+
+    # -------------------------------------------------------------- the drop box
+
+    def form_kind(self):
+        return "document" if self.what.get() == "Document" else "product"
+
+    def show_box(self):
+        """The box: its wording (as the boxes in Orders), then each held file with an x to take it off."""
+        for w in self.box.winfo_children():
+            w.destroy()
+        tk.Label(self.box, text=DROP_TEXT[self.form_kind()].replace("⤓  ", "⤓ "), background=theme.FIELD,
+                 foreground=theme.TEXT if not self.held else theme.MUTED, font=("Segoe UI", 11),
+                 justify="center", wraplength=260).grid(row=0, column=0, columnspan=2, sticky="we",
+                                                        pady=(8 if not self.held else 0, 8 if not self.held else 4))
+        for k, path in enumerate(self.held):
+            tk.Label(self.box, text=f"📎 {Path(path).name}", background=theme.FIELD, foreground=theme.OK,
+                     font=("Segoe UI", 10), anchor="w", justify="left", wraplength=230).grid(
+                row=k + 1, column=0, sticky="we")
+            x = tk.Label(self.box, text="✕", background=theme.FIELD, foreground=theme.MUTED, cursor="hand2",
+                         font=("Segoe UI", 10, "bold"), padx=4)
+            x.grid(row=k + 1, column=1, sticky="e")
+            x.bind("<Button-1>", lambda _e, i=k: self.unhold(i))
+
+    def drop_in_box(self, paths):
+        """Files dropped in the box: held for the item on the form (a document takes one: a new one replaces it).
+        A PDF for a document fills in Pages."""
+        kind = self.form_kind()
+        if not check_drop(self.win, kind, paths):
+            return
+        if kind == "document":
+            self.held = [paths[0]]
+            pages = pdf_pages(paths[0])
+            if pages and "pages" in self.option_vars:
+                self.option_vars["pages"].set(str(pages))
+        else:
+            self.held += [x for x in paths if x not in self.held]
+        self.editor_error.config(text="")
+        self.show_box()
+        self.reprice()
+
+    def unhold(self, index):
+        if 0 <= index < len(self.held):
+            del self.held[index]
+        self.show_box()
+
+    def what_changed(self):
+        """A product's files kept when switching to Document: one file, of a type a document takes."""
+        note = ""
+        if self.what.get() == "Document" and self.held:
+            fits = [x for x in self.held if wo.drop_problem(x, "document") is None]
+            if len(self.held) > 1 and fits:
+                note = f"Documents take one file: kept {Path(fits[0]).name}"
+            elif not fits:
+                note = f"A document can't print {', '.join(Path(x).name for x in self.held)}: taken off"
+            self.held = fits[:1]
+        self.build_options()
+        self.editor_error.config(text=note)
 
     def read_item(self):
         """The item from the editor, or raises ValueError with what is wrong."""
@@ -437,11 +518,10 @@ class QuoteScreen(Screen):
         self.editor_error.config(text="")
         if self.editing is None:
             self.items.append(item)
-            self.drops.append([])
+            self.drops.append(list(self.held))  # the box's files go with the new item
         else:
-            if self.items[self.editing]["kind"] != item["kind"]:
-                self.drops[self.editing] = []  # a document's file is no product's design (and back)
             self.items[self.editing] = item
+            self.drops[self.editing] = list(self.held)  # the box showed the item's files: saved back
         self.cancel_edit()
         self.reprice()
 
@@ -461,6 +541,7 @@ class QuoteScreen(Screen):
             return
         self.editing = sel[0]
         item = self.items[self.editing]
+        self.held = list(self.drops[self.editing]) if self.editing < len(self.drops) else []
         self.what.set("Document" if item["kind"] == "document" else walkin_pricing.product_of(item)["name"])
         self.build_options(item)
         self.editor.config(text=f"Edit item {self.editing + 1}")
@@ -469,6 +550,7 @@ class QuoteScreen(Screen):
 
     def cancel_edit(self):
         self.editing = None
+        self.held = []  # files never added to an item are let go (nothing was copied)
         self.editor.config(text="Add an item")
         self.add_btn.config(text="Add item")
         self.cancel_edit_btn.pack_forget()
