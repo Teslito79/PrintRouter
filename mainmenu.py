@@ -1,36 +1,63 @@
-"""The main menu ORCA opens on: Walk-in, PrintHub, Counter, Prices (Tesla, 2026-11-15),
-Data (toners, 2026-11-16).
+"""The main menu ORCA opens on: Walk-in, Orders, PrintHub, Counter, Prices, Data (Tesla, 2026-11-15 to 17).
 
-Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X)
-comes back here; closing the menu closes ORCA. The walk-in screen is made at start and only
-hidden, so its files, the inbox, the website sync and the finished-order cleanup keep running
-whatever shows. PrintHub is made the first time it is opened and is then only hidden too.
-Counter and Prices are made fresh each time.
+Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X) comes back here;
+closing the menu closes ORCA. The menu starts what runs whatever shows: the ttk style, the website sync, the
+finished-order cleanup, the toner reader and the walk-in file checks and sending. PrintHub is made the first time
+it is opened and is then only hidden (its orders and a waiting "Print backs" stay). Walk-in, Orders, Counter,
+Prices and Data are made fresh each time (walk-in orders live in their folders, not in the window).
 """
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import cleanup
 import costs
 import counter
+import jobs
 import printhub
+import routing
+import sync
 import theme
 import toners
+import walkin_print
+import walkin_screens
+
+FONT = ("Segoe UI", 12)
+
+
+def setup_style(root):
+    """The dark ttk style and the fonts every screen uses (was in the old Walk-in window until 2026-11-17)."""
+    style = ttk.Style(root)
+    theme.apply(root)
+    style.configure(".", font=FONT)
+    style.configure("Treeview", rowheight=28)
+    style.configure("Treeview.Heading", font=("Segoe UI", 11, "bold"))
+    style.configure("Print.TButton", font=("Segoe UI", 16, "bold"), padding=10)
+    style.configure("Summary.TLabel", font=("Segoe UI", 13, "bold"))
+    style.configure("Section.TLabelframe.Label", font=("Segoe UI", 12, "bold"))
+    root.option_add("*TCombobox*Listbox.font", FONT)
 
 
 class MainMenu:
-    def __init__(self, root, walk_in_class):
-        """walk_in_class: app.App (passed in, because app.py is the program that starts the menu)."""
+    def __init__(self, root):
         self.root = root
-        walk_in = tk.Toplevel(root)
-        walk_in.withdraw()
-        # Builds the ttk style, starts the website sync and the cleanup (app.App.__init__).
-        self.walkin = walk_in_class(walk_in, on_back=self.show_menu)
-        theme.dark_title_bar(walk_in)
-        self.rules = self.walkin.rules
-        self.printhub = None
+        setup_style(root)
+        self.rules = routing.load_json("rules.json")
+        self.prices = routing.load_json("prices.json")
+        self.jobs = jobs.Jobs(self.rules, self.prices)  # routing, checks and sending, shared by every screen
+        threading.Thread(target=self.jobs.warm_up_checks, daemon=True).start()
+        # Website orders into Pending Orders, while ORCA is open (only with printhub_token.txt: the work PC).
+        self.sync = sync.WebsiteSync(self.rules)
+        self.sync.start()
+        # Finished Orders: each order goes to the Recycle Bin 8 days after Ready for courier.
+        cleanup.start(self.rules)
         # Copier counters and toner levels, read at start and every 10 minutes (toners.py).
         self.toners = toners.TonerWatch(self.rules)
         self.toners.start()
+        # Walk-in orders: their files are checked and their prints sent in the background.
+        self.preparer = walkin_print.Preparer()
+        self.sender = walkin_print.Sender(self.jobs)
+        self.printhub = None
 
         self.win = win = tk.Toplevel(root)
         win.title("ORCA")
@@ -38,38 +65,32 @@ class MainMenu:
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self.quit)
         style = ttk.Style(win)
-        style.configure("Menu.TButton", font=("Segoe UI", 18, "bold"), padding=(20, 16))
+        style.configure("Menu.TButton", font=("Segoe UI", 18, "bold"), padding=(20, 14))
         style.configure("Title.TLabel", font=("Segoe UI", 26, "bold"))
-        f = ttk.Frame(win, padding=(48, 36))
+        f = ttk.Frame(win, padding=(48, 32))
         f.grid(sticky="nsew")
-        ttk.Label(f, text="ORCA", style="Title.TLabel").grid(row=0, column=0, pady=(0, 28))
-        for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("PrintHub", self.open_printhub),
-                                             ("Counter", self.open_counter), ("Prices", self.open_prices),
-                                             ("Data", self.open_toners)),
+        ttk.Label(f, text="ORCA", style="Title.TLabel").grid(row=0, column=0, pady=(0, 24))
+        for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("Orders", self.open_orders),
+                                             ("PrintHub", self.open_printhub), ("Counter", self.open_counter),
+                                             ("Prices", self.open_prices), ("Data", self.open_toners)),
                                             start=1):
             button = ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command)
-            button.grid(row=r, column=0, sticky="we", pady=7)
+            button.grid(row=r, column=0, sticky="we", pady=6)
             if command == self.open_toners:  # by the command, so renaming the button keeps its dot
                 # A red dot while a spare toner count is at or below its minimum (toners.stock_low).
                 self.toner_dot = tk.Label(button, text="●", foreground=theme.ERROR, background=theme.BUTTON,
                                           font=("Segoe UI", 16), borderwidth=0)
         self.sync_label = ttk.Label(f, text="", style="Hint.TLabel", justify="center", wraplength=380)
-        self.sync_label.grid(row=7, column=0, pady=(24, 0))
+        self.sync_label.grid(row=8, column=0, pady=(22, 0))
         theme.dark_title_bar(win)
         self.show_sync()
 
     # -------------------------------------------------------------- showing
 
-    def screens(self):
-        wins = [self.walkin.root]
-        if self.printhub is not None:
-            wins.append(self.printhub.win)
-        return wins
-
     def show_menu(self):
-        for w in self.screens():
+        if self.printhub is not None:
             try:
-                w.withdraw()
+                self.printhub.win.withdraw()
             except tk.TclError:
                 pass
         self.win.deiconify()
@@ -83,12 +104,14 @@ class MainMenu:
         window.focus_force()
 
     def open_walkin(self):
-        self.open_screen(self.walkin.root)
+        self.open_screen(walkin_screens.WalkinScreen(self, on_back=self.show_menu).win)
+
+    def open_orders(self):
+        self.open_screen(walkin_screens.OrdersScreen(self, on_back=self.show_menu).win)
 
     def open_printhub(self):
         if self.printhub is None or not self.printhub.is_open():
-            self.printhub = printhub.PrintHubView(self.root, self.rules, self.walkin.jobs, self.walkin.sync,
-                                                  on_back=self.show_menu)
+            self.printhub = printhub.PrintHubView(self.root, self.rules, self.jobs, self.sync, on_back=self.show_menu)
         self.open_screen(self.printhub.win)
 
     def open_counter(self):
@@ -108,7 +131,7 @@ class MainMenu:
 
     def show_sync(self):
         """The website sync's state, the same line as in PrintHub."""
-        text, red, stuck = self.walkin.sync.status()
+        text, red, stuck = self.sync.status()
         self.sync_label.config(text="\n".join([text] + stuck), foreground=theme.ERROR if red or stuck else "")
         try:
             low = toners.stock_low(self.rules["printers"])
@@ -124,8 +147,8 @@ class MainMenu:
 
     def quit(self):
         """Closing the menu closes ORCA (asks first while something is being sent)."""
-        if self.walkin.busy and not messagebox.askyesno(
-                parent=self.win, title="ORCA", message="Files are still being sent. Close anyway?"):
+        if self.sender.busy() and not messagebox.askyesno(
+                parent=self.win, title="ORCA", message="Walk-in orders are still being sent. Close anyway?"):
             return
         if (self.printhub is not None and self.printhub.sending() and not messagebox.askyesno(
                 parent=self.win, title="ORCA", message="PrintHub orders are still being sent. Close anyway?")):

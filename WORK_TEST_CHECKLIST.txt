@@ -1,6 +1,18 @@
-ORCA - WORK PC CHECKLIST
+﻿ORCA - WORK PC CHECKLIST
 ===============================
 Work tasks now come as notes in work\notes\. Open the Work PC chat (Claude,
 folder C:\PrintRouter\ADMIN) and type go.
 
 2026-11-06. The first-real-order steps that were here are now in note W01.
+
+Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
+--------------------------------------------------------------------
+1. Get Quote: a small order (an A4 B&W document, 2 pages x 2) for a test customer. Place it, put a
+   PDF in its folder, Print Jobs, Print. The cover sheet comes out first: plain A4, black and white,
+   one side, with the name, phone, the number large, the total and the items. Then the document.
+2. A colour product (e.g. 100 business cards, a laid-out A4 PDF, confirm 13 sheets): it prints at
+   actual size on the routed copier from the Bypass Tray, on the cover sheet's copier after it.
+3. Both sides on heavy paper (Silk 300, Both sides): fronts, the 'turn the stack' box, backs. Does
+   each back land on its own front, the right way up?
+4. Counter, Today: the test prints show under Walk-in with #<number> (the cover sheet as one A4
+   B&W side). Then Orders: Ready for pickup, Collected; the folder is in Walk-in\Customers.
