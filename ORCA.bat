@@ -4,8 +4,8 @@ rem Uses Python 3.14, where the requirements are installed.
 cd /d "%~dp0"
 if /i "%~1"=="--no-update" goto start
 
-rem Get the latest version from GitHub first. With no internet, no git, or a
-rem local change in the way, the app just starts the version it already has.
+py -3.14 already_open.py || goto start & rem ORCA is open: no pull under it.
+rem Else update from GitHub (no internet/git: start what is here), start it.
 where git >nul 2>&1
 if not errorlevel 1 (
     echo Checking for updates...

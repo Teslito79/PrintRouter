@@ -1,17 +1,23 @@
 """ORCA: starts the program (ORCA.bat runs this file).
 
-Sets up the window icon and the taskbar ID, checks the settings files, then opens the main menu (mainmenu.py),
-which starts everything else. The old Walk-in window (a batch of files with options, the Inbox folder, receipts
+First of all it takes ORCA's lock (already_open.py): ORCA opens only once, and a second start just brings the
+running one to the front. Then it sets up the window icon and the taskbar ID, checks the settings files, and
+opens the main menu (mainmenu.py), which starts everything else. The old Walk-in window (a batch of files with options, the Inbox folder, receipts
 and "Add to counter") was replaced on 2026-11-17 by walk-in orders (walkin_screens.py and the walkin_ modules).
 """
-import tkinter as tk
-from tkinter import messagebox
-
-import jobs
-import routing
+import already_open
 
 
 def main():
+    # Before any window is built and before anything is read or written: another ORCA open? Show it, and stop.
+    if not already_open.acquire():
+        already_open.second_start()
+        return
+    import tkinter as tk
+    from tkinter import messagebox
+
+    import jobs
+    import routing
     try:
         import ctypes
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # sharp text on scaled screens
