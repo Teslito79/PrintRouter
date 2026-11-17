@@ -41,3 +41,4 @@ toner_stock_log.csv
 walkin_customers.json
 .walkin_customers.json.tmp
 Walk-in/
+templates-backup/

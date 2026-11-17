@@ -8,6 +8,7 @@ import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+import analyze
 import costs
 import theme
 import walkin_catalogue as cat
@@ -647,7 +648,8 @@ class PrintJobsScreen(OrderList):
         import jobs as jobs_module
         with jobs_module.PDF_LOCK:
             walkin_print.cover_pdf(order, cover)
-        cjob = walkin_print.cover_job(shared, first)
+            cover_pages = analyze.page_count(cover)
+        cjob = walkin_print.cover_job(shared, first, cover_pages)
         if cjob is None or cjob["problem"]:
             raise ValueError(f"the cover sheet can't print on {shared.printers[first]['label']}"
                              + (f": {cjob['problem']}" if cjob else ""))
