@@ -1,29 +1,44 @@
-"""Prices for a walk-in order (2026-11-17): the website's rules with the walk-in prices (walkin_prices.PriceList).
+"""Prices for a walk-in order (2026-11-17_08): copies, paper and cuts, from Walk-in_Prices.xlsx (walkin_prices.py).
 
-Prices come only from Walk-in_Prices.xlsx (2026-11-17_07): a price that is empty there (or a size, quantity or
-paper that isn't in it) is a problem, "No price in the price list for …", and the item can't be added or placed.
-Products: price by size and quantity, Both sides x the Settings value (x1 while empty), extras (% of the item, per
-piece or per line), same-size items priced together when Settings says Yes (cheapest exact sum, never more than a
-larger priced quantity, plus the extra design fee per design after the first, only when cheaper). Envelopes and
-booklets: the price for size, pages and quantity. Documents: per printed side with tiers across all document items
-in the order, paper, lamination, spiral and staple, and "never pay more for fewer pages". Loyalty: that level's %
-off the whole order, after the quantity price. Rounding (rounded()): staff may only round the total. No delivery fee.
+Tesla, 2026-11-17: "they should be priced of how many papers we copy the type of paper and the amount of cutting it
+needs". Item = copies x price per copy + sheets x paper price + cuts x price per cut + extras.
+- A copy is one printed side (both sides = 2 copies per sheet); its price depends on the sheet size (A4/A3) and colour,
+  in tiers counted over all copies of the order of that size and colour (Settings: Tier 2 from, Tier 3 from), and
+  never more for fewer: when the next tier's lowest count costs less in total, that is charged (the volume line).
+- Each sheet of paper used is charged once at that paper's A4 or A3 price.
+- Products: sheets = quantity / pieces per A4 (rules.json pieces_per_sheet); anything more than one per sheet is on A4;
+  an A4 piece on A4, an A3 piece on A3, a size that only fits A3 on A3. Cuts per stack = (rows + 1) + (columns + 1),
+  with rows x columns worked out from the pieces per sheet (fewest cuts); stacks = sheets / sheets per stack for the
+  paper's weight. Labels: A4 label sheets, no cuts. Stapled booklets: pages / 4 sheets per copy of the opened size,
+  both sides, staple per copy. Envelopes: the envelope's price plus its copies (C4 counts as A3).
+- Documents: copies by pages per side and colour pages, sheets by sides, paper per sheet, a typed number of cuts,
+  lamination per sheet, spiral by sheets per copy, staple per copy.
+- Product extras and services: per piece, per sheet or once per item.
+A needed cell that is empty blocks the item ("No price for …: fill it in in Walk-in_Prices.xlsx"); nothing is guessed.
+Order: the items (plus the volume line), minus the loyalty %, then the staff's rounding. No minimum charge.
 """
 import math
 
+import routing
 import walkin_catalogue as cat
 from walkin_catalogue import r2
 
-SAME_ROW = {"1/3 A4": "DL 99 x 210 mm"}  # sizes that are one price row
 SHEET = "Walk-in_Prices.xlsx"
+SHEET_MM = {"A4": (210, 297), "A3": (297, 420)}
+COLOUR_WORD = {"bw": "black and white", "color": "colour"}
+ENVELOPE_A3 = ("C4",)  # envelopes that count as A3 copies; the others count as A4
 
 
 def euro(x):
     return f"EUR {x:,.2f}"
 
 
+def money(x):
+    return f"{x:,.2f}"
+
+
 def no_price(what):
-    return f"No price in the price list for {what}: fill it in in {SHEET}"
+    return f"No price for {what}: fill it in in {SHEET}"
 
 
 # ------------------------------------------------------------------ rounding (staff can only round the total)
@@ -62,10 +77,17 @@ def describe(item):
             parts.append(item["finish"])
         if item.get("lam"):
             parts.append(f"laminated ({item['lam_sheets']} sheets)" if item.get("lam_sheets") else "laminated")
-        return ", ".join(parts)
-    p = product_of(item)
-    picks = [o["choices"][item["picks"].get(o["key"], 0)] for o in p["options"]]
-    return f"{item['qty']} x {p['name']}, " + ", ".join(c for c in picks if c not in ("None",))
+        if item.get("cuts"):
+            parts.append(f"{item['cuts']} cuts")
+        text = ", ".join(parts)
+    else:
+        p = product_of(item)
+        picks = [o["choices"][item["picks"].get(o["key"], 0)] for o in p["options"]]
+        text = f"{item['qty']} x {p['name']}, " + ", ".join(c for c in picks if c not in ("None",))
+    if item.get("services"):
+        text += ", " + ", ".join(name if not count or count is True else f"{name} x {count}"
+                                 for name, count in item["services"].items())
+    return text
 
 
 def folder_name(index, item):
@@ -81,127 +103,155 @@ def folder_name(index, item):
     return f"{index} {' '.join(name.split())}"
 
 
-# ------------------------------------------------------------------ products
+# ------------------------------------------------------------------ layout: sheets and cuts
 
-def _row(pl, size):
-    return pl.products.get(SAME_ROW.get(size, size)) or pl.products.get(size)
-
-
-def group_price(pl, size, q):
-    """One-side price for q pieces: the price for exactly q, else the cheapest exact sum of priced quantities,
-    never more than a larger priced quantity (the website's groupPrice)."""
-    row = _row(pl, size)
-    if not row or q <= 0:
-        return None
-    if q in row:
-        return row[q]
-    cents = {k: round(v * 100) for k, v in row.items()}
-    best = [0] + [math.inf] * q
-    for n in range(1, q + 1):
-        for k, c in cents.items():
-            if k <= n and best[n - k] + c < best[n]:
-                best[n] = best[n - k] + c
-    larger = [c for k, c in cents.items() if k > q]
-    value = min([best[q]] + larger)
-    return None if value == math.inf else value / 100
+_RULES = {}
 
 
-def _extra(pl, p, item):
-    """(factor on the price, fixed EUR added, problem or None): the extra's price from the Extras sheet."""
-    for o in p["options"]:
-        if o["key"] == "extra" and p["id"] not in cat.EXAMPLE_PRICED:
-            idx = item["picks"].get("extra", 0)
-            if idx == 0:
-                return 1.0, 0.0, None
-            choice = o["choices"][idx]
-            if choice not in pl.extras:
-                return 1.0, 0.0, no_price(f"{choice} ({p['name']})")
-            price, how = pl.extras[choice]
-            if how == "pct":
-                return 1 + price / 100, 0.0, None
-            return 1.0, (price * item["qty"] if how == "piece" else price), None
-    return 1.0, 0.0, None
+def rules_now():
+    key = str(routing.app_dir())
+    if key not in _RULES:
+        _RULES[key] = routing.load_json("rules.json")
+    return _RULES[key]
 
 
-def _sides(pl, p, item):
-    return pl.sides_factor() if cat.choice(p, "sides", item["picks"]) == "Both sides" else 1.0
-
-
-def product_alone(pl, item):
-    """(price, problem or None) for one product item on its own."""
-    p = product_of(item)
-    if p is None:
-        return 0.0, f"unknown product {item.get('product')}"
-    size = cat.size_of(p, item["picks"])
-    if p["id"] in cat.EXAMPLE_PRICED:
-        pages = cat.choice(p, "extra", item["picks"])
-        price = pl.examples.get((p["id"], size, pages, item["qty"]))
-        if price is None:
-            return 0.0, no_price(f"{p['name']} {size}{', ' + pages if pages else ''} x {item['qty']}")
-        return price, None
-    base = _row(pl, size).get(item["qty"]) if _row(pl, size) else None
-    if base is None:
-        return 0.0, no_price(f"{p['name']} {size} x {item['qty']}")
-    factor, fixed, problem = _extra(pl, p, item)
-    if problem:
-        return 0.0, problem
-    return r2(base * _sides(pl, p, item) * factor + fixed), None
-
-
-def price_products(pl, items):
-    """[(price, note)] for the product items (by their index in items); same-size items priced together."""
-    out = {}
-    problems = []
-    bad = set()
-    for i, item in enumerate(items):
-        if item["kind"] == "product":
-            price, problem = product_alone(pl, item)
-            out[i] = [price, ""]
-            if problem:
-                problems.append(f"Item {i + 1}: {problem}")
-                bad.add(i)
-    if not pl.group:
-        return out, problems
-    groups = {}
-    for i, item in enumerate(items):
-        p = product_of(item) if item["kind"] == "product" else None
-        if p is None or p["id"] in cat.EXAMPLE_PRICED or i in bad:
+def pieces_entry(rules, w, h, tolerance=2):
+    """rules.json pieces_per_sheet for a size in mm, either way round, within a few mm ({"A4": 8, "A3": 18}),
+    or None."""
+    table = rules.get("pieces_per_sheet") or {}
+    for key, entry in table.items():
+        if not isinstance(entry, dict) or "x" not in key:
             continue
-        size = cat.size_of(p, item["picks"])
-        groups.setdefault(SAME_ROW.get(size, size), []).append(i)
-    for size, idx in groups.items():
-        if len(idx) < 2:
+        try:
+            a, b = (float(v) for v in key.split("x"))
+        except ValueError:
             continue
-        q = sum(items[i]["qty"] for i in idx)
-        gp = group_price(pl, size, q)
-        if gp is None:
-            continue
-        g_cents = round(gp * 100) + round(pl.design_fee * 100) * (len(idx) - 1)
-        exact = [g_cents * items[i]["qty"] / q for i in idx]
-        share = [math.floor(x) for x in exact]
-        left = g_cents - sum(share)
-        for j in sorted(range(len(idx)), key=lambda j: (-(exact[j] - share[j]), j)):
-            if left <= 0:
-                break
-            share[j] += 1
-            left -= 1
-        priced = []
-        for j, i in enumerate(idx):
-            p = product_of(items[i])
-            factor, fixed, _ = _extra(pl, p, items[i])
-            priced.append(r2(share[j] / 100 * _sides(pl, p, items[i]) * factor + fixed))
-        alone = sum(round(out[i][0] * 100) for i in idx)
-        save = alone - sum(round(x * 100) for x in priced)
-        if save <= 0:
-            continue
-        note = (f"Priced together: {q} x {size}, {len(idx)} designs. "
-                f"Saves {euro(save / 100)} ({round(save / alone * 100)}%).")
-        for j, i in enumerate(idx):
-            out[i] = [priced[j], note]
-    return out, problems
+        if any(abs(a - x) <= tolerance and abs(b - y) <= tolerance for x, y in ((w, h), (h, w))):
+            return entry
+    return None
 
 
-# ------------------------------------------------------------------ documents
+def grid(w, h, per, sheet):
+    """(rows, columns) with rows x columns = per that fit on the sheet, the piece either way round, with the fewest
+    cuts ((rows + 1) + (columns + 1)); None when none fits."""
+    sw, sh = SHEET_MM[sheet]
+    best = None
+    for rows in range(1, per + 1):
+        if per % rows:
+            continue
+        cols = per // rows
+        for pw, ph in ((w, h), (h, w)):
+            if cols * pw <= sw + 0.5 and rows * ph <= sh + 0.5:
+                cuts = rows + 1 + cols + 1
+                if best is None or cuts < best[2]:
+                    best = (rows, cols, cuts)
+    return best[:2] if best else None
+
+
+def same_size(w, h, sheet, tolerance=2):
+    """True when the piece is the sheet itself (within a few mm: an opened A5 booklet, 2 x 148 mm, is an A4)."""
+    sw, sh = SHEET_MM[sheet]
+    return any(abs(w - a) <= tolerance and abs(h - b) <= tolerance for a, b in ((sw, sh), (sh, sw)))
+
+
+def layout(rules, w, h, what):
+    """{sheet, per, rows, cols} for pieces of w x h mm, or raises ValueError with the reason (the item can't be
+    added). An A4 / A3 piece: its own sheet, no cuts. More than one per A4: on A4. Only fits A3: on A3."""
+    for sheet in ("A4", "A3"):
+        if same_size(w, h, sheet):
+            return {"sheet": sheet, "per": 1, "rows": None, "cols": None}
+    entry = pieces_entry(rules, w, h)
+    if entry is None:
+        raise ValueError(f"{what}: no layout for {round(w)} x {round(h)} mm in rules.json pieces_per_sheet")
+    if isinstance(entry.get("A4"), int) and entry["A4"] > 0:
+        sheet, per = "A4", entry["A4"]
+    elif isinstance(entry.get("A3"), int) and entry["A3"] > 0:
+        sheet, per = "A3", entry["A3"]
+    else:
+        raise ValueError(f"{what}: no pieces per sheet for {round(w)} x {round(h)} mm in rules.json")
+    rc = grid(w, h, per, sheet)
+    if rc is None:
+        sw, sh = SHEET_MM[sheet]
+        raise ValueError(f"{what}: {per} pieces of {round(w)} x {round(h)} mm don't fit on {sw} x {sh} mm")
+    return {"sheet": sheet, "per": per, "rows": rc[0], "cols": rc[1]}
+
+
+# ------------------------------------------------------------------ one item's needs
+
+class Needs:
+    """What one item uses: copies by (size, colour), fixed costs with their working lines, problems."""
+
+    def __init__(self):
+        self.copies = {}  # (size, "bw"/"color") -> count
+        self.lines = []  # (text without the amount, amount)
+        self.problems = []
+        self.sheets = 0
+
+    def copy(self, size, colour, n):
+        if n > 0:
+            self.copies[(size, colour)] = self.copies.get((size, colour), 0) + n
+
+    def cost(self, text, amount):
+        self.lines.append((text, r2(amount)))
+
+
+def _paper(pl, n, need, paper, sheet):
+    row = pl.paper_row(paper)
+    price = pl.papers.get(row, {}).get(sheet)
+    if price is None:
+        need.problems.append(no_price(f"{row}, {sheet} sheet"))
+        return
+    need.cost(f"{n} {sheet} sheets {paper} x {money(price)}", n * price)
+
+
+def _cuts(pl, need, lay, sheets, paper):
+    """Cuts for a product (or a booklet laid out more than one per sheet)."""
+    if lay["rows"] is None:
+        return
+    gsm = routing.paper_gsm(paper) or 80
+    stack = pl.stack_for(gsm)
+    if stack is None:
+        need.problems.append(f"No Sheets per stack row covers {gsm} gsm on the Cutting sheet of {SHEET}")
+        return
+    label, per_stack = stack
+    if per_stack is None:
+        need.problems.append(no_price(f"sheets per stack, {label}").replace("No price for", "No number for"))
+        return
+    if pl.cut_price is None:
+        need.problems.append(no_price("the price per cut"))
+        return
+    stacks = math.ceil(sheets / per_stack)
+    per = (lay["rows"] + 1) + (lay["cols"] + 1)
+    n = per * stacks
+    grid_text = f"{lay['rows']} x {lay['cols']}" + (f", {stacks} stacks" if stacks > 1 else "")
+    need.cost(f"{n} cuts ({grid_text}) x {money(pl.cut_price)}", n * pl.cut_price)
+
+
+def _extra(pl, need, name, table, what, pieces, sheets):
+    price, how = table.get(name, (None, None))[:2]
+    if price is None:
+        need.problems.append(no_price(f"{name} ({what})"))
+        return
+    if how == "piece":
+        need.cost(f"{name}: {pieces} x {money(price)}", pieces * price)
+    elif how == "sheet":
+        need.cost(f"{name}: {sheets} sheets x {money(price)}", sheets * price)
+    else:
+        need.cost(f"{name}: once x {money(price)}", price)
+
+
+def _services(pl, need, item, pieces, sheets):
+    for name, count in (item.get("services") or {}).items():
+        _, how = pl.services.get(name, (None, None, ""))[:2]
+        if how == "piece" and item["kind"] == "document":
+            n = count if isinstance(count, int) and not isinstance(count, bool) else 0
+            if n < 1:
+                need.problems.append(f"{name}: type how many")
+                continue
+            _extra(pl, need, name, pl.services, "service", n, sheets)
+        else:
+            _extra(pl, need, name, pl.services, "service", pieces, sheets)
+
 
 def page_set(text, pages):
     out = set()
@@ -218,7 +268,7 @@ def page_set(text, pages):
 
 
 def doc_counts(item):
-    """Printed sides (B&W, colour) and sheets for one document item, copies included (the website's way)."""
+    """Copies (B&W, colour) and sheets for one document item, copies included."""
     pages, copies = max(0, int(item["pages"])), max(1, int(item["copies"]))
     nup = item.get("per_side", 1) if item.get("per_side", 1) in cat.PER_SIDE else 1
     sides_per_copy = math.ceil(pages / nup)
@@ -235,102 +285,174 @@ def doc_counts(item):
             "sheets": sheets_per_copy * copies, "copies": copies, "pages": pages}
 
 
-def price_documents(pl, items):
-    """({item index: price}, volume adjustment (<= 0), problems)."""
-    docs = [(i, it, doc_counts(it)) for i, it in enumerate(items) if it["kind"] == "document"]
-    billed = sum(c["bw"] + c["color"] for _, _, c in docs)
-    tier = 3 if billed >= 500 else 2 if billed >= 200 else 1 if billed >= 100 else 0
-    tier_names = ["1-99 sides", "100-199 sides", "200-499 sides", "500+ sides"]
-    colour_names = {"bw": "black and white", "color": "colour"}
-    out, problems = {}, []
-    for i, it, c in docs:
-        if c["pages"] == 0:
-            out[i] = 0.0
-            problems.append(f"Item {i + 1}: no pages")
-            continue
-        missing = []
-        rates = pl.doc_rates[it["size"]]
-        amount = 0.0
-        for mode in ("bw", "color"):
-            if c[mode]:
-                if rates[mode][tier] is None:
-                    missing.append(f"{it['size']} {colour_names[mode]}, {tier_names[tier]}")
-                else:
-                    amount += c[mode] * rates[mode][tier]
-        paper = pl.doc_papers.get(it["paper"])
-        if paper == "glossy":
-            under, over = pl.glossy
-            if c["sheets"] < 100 and (under is None or over is None):
-                missing.append("Glossy 100 gsm (under 100 sheets, and 100 sheets or more for the cap)")
-            elif c["sheets"] >= 100 and over is None:
-                missing.append("Glossy 100 gsm (100 sheets or more)")
-            else:
-                amount += min(c["sheets"] * under, 100 * over) if c["sheets"] < 100 else c["sheets"] * over
-        elif isinstance(paper, (int, float)):
-            amount += c["sheets"] * paper
-        elif it["paper"] not in pl.doc_papers:
-            missing.append(f"the paper “{it['paper']}”")
-        if it.get("finish") == "spiral":
-            band = next(((limit, price) for limit, price in pl.spiral if c["sheets_per_copy"] <= limit), None)
-            if band is None:
-                problems.append(f"Item {i + 1}: more than {pl.spiral[-1][0]} sheets per copy can't be spiral bound")
-            elif band[1] is None:
-                missing.append(f"Spiral binding ({c['sheets_per_copy']} sheets per copy)")
-            else:
-                amount += band[1] * c["copies"]
-        elif it.get("finish") == "staple":
+def _document(pl, item):
+    need = Needs()
+    c = doc_counts(item)
+    if c["pages"] == 0:
+        need.problems.append("no pages")
+        return need
+    size = item["size"]
+    need.copy(size, "bw", c["bw"])
+    need.copy(size, "color", c["color"])
+    need.sheets = c["sheets"]
+    _paper(pl, c["sheets"], need, item["paper"], size)
+    cuts = int(item.get("cuts") or 0)
+    if cuts:
+        if pl.cut_price is None:
+            need.problems.append(no_price("the price per cut"))
+        else:
+            need.cost(f"{cuts} cuts x {money(pl.cut_price)}", cuts * pl.cut_price)
+    if item.get("finish") == "spiral":
+        band = next(((limit, price) for limit, price in pl.spiral if c["sheets_per_copy"] <= limit), None)
+        if band is None:
+            need.problems.append(f"more than {pl.spiral[-1][0]} sheets per copy can't be spiral bound")
+        elif band[1] is None:
+            need.problems.append(no_price(f"Spiral binding (per copy, {c['sheets_per_copy']} sheets)"))
+        else:
+            need.cost(f"Spiral binding: {c['copies']} x {money(band[1])}", c["copies"] * band[1])
+    elif item.get("finish") == "staple":
+        if pl.staple is None:
+            need.problems.append(no_price("Staple (per copy)"))
+        else:
+            need.cost(f"Staple: {c['copies']} x {money(pl.staple)}", c["copies"] * pl.staple)
+    if item.get("lam"):
+        n = min(int(item.get("lam_sheets") or 0) or c["sheets"], c["sheets"])
+        if pl.lamination[size] is None:
+            need.problems.append(no_price(f"Lamination {size} (per sheet)"))
+        else:
+            need.cost(f"Lamination {size}: {n} sheets x {money(pl.lamination[size])}", n * pl.lamination[size])
+    _services(pl, need, item, c["copies"], c["sheets"])
+    return need
+
+
+def _product(pl, item, rules):
+    need = Needs()
+    p = product_of(item)
+    if p is None:
+        need.problems.append(f"unknown product {item.get('product')}")
+        return need
+    qty = int(item["qty"])
+    if qty < 1:
+        need.problems.append("Quantity: 1 or more")
+        return need
+    size, paper = cat.size_of(p, item["picks"]), cat.choice(p, "paper", item["picks"])
+    sides = 2 if cat.choice(p, "sides", item["picks"]) == "Both sides" else 1
+    colour = "bw" if cat.choice(p, "colour", item["picks"]) == "Black and white" else "color"
+    pieces, sheets = qty, 0
+    if p["id"] == "envelope":
+        kind = size.split()[0]
+        price = pl.envelopes.get((size, paper))
+        if price is None:
+            need.problems.append(no_price(f"{size}, {paper} envelope"))
+        else:
+            need.cost(f"{qty} envelopes {size}, {paper} x {money(price)}", qty * price)
+        need.copy("A3" if kind in ENVELOPE_A3 else "A4", colour, qty * sides)
+    elif p["id"] == "labels":
+        sheets = qty
+        need.copy("A4", colour, sheets * sides)
+        _paper(pl, sheets, need, "Label sheet", "A4")
+    elif p["id"] in cat.BOOKLETS:
+        pages_text = cat.choice(p, "extra", item["picks"]) or ""
+        if not pages_text.split()[0].isdigit():
+            need.problems.append(f"{p['name']}: the pages are a range (“{pages_text}”), so ORCA can't count the "
+                                 f"sheets. Use a Document with Spiral finishing instead")
+            return need
+        pages = int(pages_text.split()[0])
+        w, h = cat.CUT_MM[size]
+        try:
+            lay = layout(rules, 2 * w, h, f"{p['name']} {size} (opened {round(2 * w)} x {round(h)} mm)")
+        except ValueError as e:
+            need.problems.append(str(e))
+            return need
+        per_copy = math.ceil(pages / 4)
+        sheets = math.ceil(per_copy * qty / lay["per"])
+        need.copy(lay["sheet"], colour, sheets * 2)
+        _paper(pl, sheets, need, paper, lay["sheet"])
+        _cuts(pl, need, lay, sheets, paper)
+        if p["id"] == "stapled":
             if pl.staple is None:
-                missing.append("Staple")
+                need.problems.append(no_price("Staple (per copy)"))
             else:
-                amount += pl.staple * c["copies"]
-        if it.get("lam"):
-            n = min(int(it.get("lam_sheets") or 0) or c["sheets"], c["sheets"])
-            if pl.lamination[it["size"]] is None:
-                missing.append(f"Lamination {it['size']}")
-            else:
-                amount += n * pl.lamination[it["size"]]
-        for what in missing:
-            problems.append(f"Item {i + 1}: {no_price(what)}")
-        out[i] = 0.0 if missing else amount
-    # Never pay more for fewer pages: the next tier's rate (with padding pages) when that is cheaper.
-    # A tier with an empty rate that this order would need is left out.
-    def print_at(k):
-        total = 0.0
-        for _, it, c in docs:
-            for mode in ("bw", "color"):
-                if c[mode]:
-                    rate = pl.doc_rates[it["size"]][mode][k]
-                    if rate is None:
-                        return None
-                    total += c[mode] * rate
-        return total
-    active = [(it, c) for _, it, c in docs if c["pages"] > 0]
-    adjust = 0.0
-    normal = print_at(tier) if active else None
-    if normal is not None:
-        best = normal
-        for k in range(tier + 1, 4):
-            at = print_at(k)
-            pads = [pl.doc_rates[it["size"]]["bw"][k] for it, _ in active]
-            if at is None or any(r is None for r in pads):
-                continue
-            best = min(best, at + (cat.DOC_TIERS[k] - billed) * min(pads))
-        if best - normal < -0.004:
-            adjust = best - normal
-    return {i: r2(v) for i, v in out.items()}, r2(adjust), problems
+                need.cost(f"Staple: {qty} x {money(pl.staple)}", qty * pl.staple)
+    else:
+        cut = cat.CUT_MM.get(size)
+        if cut is None:
+            need.problems.append(f"{p['name']} {size}: no cut size known")
+            return need
+        try:
+            lay = layout(rules, cut[0], cut[1], f"{p['name']} {size}")
+        except ValueError as e:
+            need.problems.append(str(e))
+            return need
+        sheets = math.ceil(qty / lay["per"])
+        need.copy(lay["sheet"], colour, sheets * sides)
+        _paper(pl, sheets, need, paper, lay["sheet"])
+        _cuts(pl, need, lay, sheets, paper)
+    need.sheets = sheets
+    extra = cat.choice(p, "extra", item["picks"]) if p["id"] not in cat.BOOKLETS else None
+    if extra and extra != "None":
+        _extra(pl, need, extra, pl.extras, "product extra", pieces, sheets)
+    _services(pl, need, item, pieces, sheets)
+    return need
+
+
+def needs(pl, item, rules=None):
+    rules = rules if rules is not None else rules_now()
+    return _document(pl, item) if item["kind"] == "document" else _product(pl, item, rules)
 
 
 # ------------------------------------------------------------------ the order
 
-def price_order(pl, items, loyalty=0, rounding=None):
-    """Everything the price list shows: item prices and notes, volume line, subtotal, loyalty line, total, and
-    `due`: the total after the staff's rounding (the same as total without one)."""
-    prod, problems = price_products(pl, items)
-    docs, adjust, doc_problems = price_documents(pl, items)
+def price_order(pl, items, loyalty=0, rounding=None, rules=None):
+    """Everything the price list shows: each item's price and working lines, the volume line (never more for fewer
+    copies), subtotal, loyalty line, total, and `due`: the total after the staff's rounding."""
+    all_needs = [needs(pl, item, rules) for item in items]
+    problems = [f"Item {i + 1}: {p}" for i, n in enumerate(all_needs) for p in n.problems]
+    counts = {}
+    for n in all_needs:
+        for key, k in n.copies.items():
+            counts[key] = counts.get(key, 0) + k
+    tiers = {key: pl.tier_of(count) for key, count in counts.items()}
     lines = []
-    for i, item in enumerate(items):
-        price, note = prod[i] if i in prod else (docs.get(i, 0.0), "")
-        lines.append({"price": r2(price), "note": note})
+    for i, (item, n) in enumerate(zip(items, all_needs)):
+        working = [describe(item)]
+        price = 0.0
+        bad = bool(n.problems)
+        for (size, colour), k in sorted(n.copies.items()):
+            tier = tiers[(size, colour)]
+            rate = pl.copies[(size, colour)][tier - 1]
+            if rate is None:
+                problems.append(f"Item {i + 1}: {no_price(f'{size} {COLOUR_WORD[colour]} copies, Tier {tier}')}")
+                bad = True
+                continue
+            amount = r2(k * rate)
+            working.append(f"{k} {size} {COLOUR_WORD[colour]} copies x {money(rate)} (tier {tier}) = {money(amount)}")
+            price += amount
+        for text, amount in n.lines:
+            working.append(f"{text} = {money(amount)}")
+            price += amount
+        price = 0.0 if bad else r2(price)
+        working.append(f"Total {money(price)}")
+        lines.append({"price": price, "note": "", "working": working, "copies": {f"{s} {c}": k for (s, c), k
+                                                                                in n.copies.items()},
+                      "sheets": n.sheets})
+    # Never pay more for fewer: per size and colour, the next tier's lowest count when that costs less in total.
+    adjust = 0.0
+    for key, count in counts.items():
+        rates = pl.copies[key]
+        tier = tiers[key]
+        if rates[tier - 1] is None:
+            continue
+        normal = count * rates[tier - 1]
+        best = normal
+        for k in range(tier + 1, 4):
+            start = pl.tier_start(k)
+            if start is None or rates[k - 1] is None or start <= count:
+                continue
+            best = min(best, start * rates[k - 1])
+        if best - normal < -0.004:
+            adjust += best - normal
+    adjust = r2(adjust)
     subtotal = r2(sum(l["price"] for l in lines) + adjust)
     pct = pl.loyalty.get(loyalty) if loyalty else None
     if loyalty and pct is None:
@@ -345,4 +467,4 @@ def price_order(pl, items, loyalty=0, rounding=None):
     total = r2(subtotal + (loyalty_line["amount"] if loyalty_line else 0))
     return {"lines": lines, "volume": adjust, "subtotal": subtotal, "loyalty": loyalty_line, "total": total,
             "rounding": rounding if rounding in ROUNDINGS else None, "due": rounded(total, rounding),
-            "problems": problems + doc_problems}
+            "problems": problems}

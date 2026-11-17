@@ -591,7 +591,8 @@ class QuoteScreen(Screen):
         right.grid(row=0, column=1, sticky="nsew")
         right.columnconfigure(0, weight=1)
         right.rowconfigure(0, weight=1)
-        self.tree = ttk.Treeview(right, columns=("n", "item", "price"), show="headings", height=8, selectmode="browse")
+        self.tree = ttk.Treeview(right, columns=("n", "item", "price"), show="headings", height=12, selectmode="browse")
+        self.tree.tag_configure("working", foreground=theme.MUTED)
         for col, text, width, stretch in (("n", "#", 40, False), ("item", "Item", 520, True), ("price", "Price", 110, False)):
             self.tree.heading(col, text=text, anchor="w")
             self.tree.column(col, width=width, stretch=stretch, anchor="e" if col == "price" else "w")
@@ -668,12 +669,12 @@ class QuoteScreen(Screen):
         pl = walkin_prices.current()
         row = 0
 
-        def combo(label, values, value):
+        def combo(label, values, value, typed=False):
             nonlocal row
             ttk.Label(self.options, text=label + ":").grid(row=row, column=0, sticky="w", pady=3)
             var = tk.StringVar(value=value)
-            ttk.Combobox(self.options, textvariable=var, values=values, state="readonly", width=28, font=FONT).grid(
-                row=row, column=1, sticky="w", pady=3)
+            ttk.Combobox(self.options, textvariable=var, values=values, state="normal" if typed else "readonly",
+                         width=28, font=FONT).grid(row=row, column=1, sticky="w", pady=3)
             row += 1
             return var
 
@@ -687,7 +688,8 @@ class QuoteScreen(Screen):
 
         if self.what.get() == "Document":
             d = item or {"size": "A4", "pages": 1, "copies": 1, "color": "bw", "color_pages": "", "sides": "single",
-                         "per_side": 1, "paper": "Normal 80 gsm", "finish": "none", "lam": False, "lam_sheets": 0}
+                         "per_side": 1, "paper": "Normal 80 gsm", "finish": "none", "lam": False, "lam_sheets": 0,
+                         "cuts": 0}
             v = self.option_vars
             v["size"] = combo("Size", ["A4", "A3"], d["size"])
             v["pages"] = entry("Pages", d["pages"])
@@ -696,7 +698,7 @@ class QuoteScreen(Screen):
             v["color_pages"] = entry("Colour pages (e.g. 1, 3-5)", d["color_pages"], 16)
             v["sides"] = combo("Sides", list(SIDE_CHOICES), next(k for k, x in SIDE_CHOICES.items() if x == d["sides"]))
             v["per_side"] = combo("Pages per side", [str(n) for n in cat.PER_SIDE], str(d["per_side"]))
-            papers = list(pl.doc_papers)
+            papers = pl.doc_papers()
             v["paper"] = combo("Paper", papers if d["paper"] in papers else papers + [d["paper"]], d["paper"])
             v["finish"] = combo("Finishing", list(FINISH_CHOICES),
                                 next(k for k, x in FINISH_CHOICES.items() if x == d["finish"]))
@@ -704,12 +706,32 @@ class QuoteScreen(Screen):
             ttk.Checkbutton(self.options, text="Laminate", variable=v["lam"]).grid(row=row, column=0, sticky="w", pady=3)
             row += 1
             v["lam_sheets"] = entry("Sheets to laminate (0 = all)", d["lam_sheets"])
+            v["cuts"] = entry("Cuts (how many)", d.get("cuts", 0))
         else:
             p = next(p for p in cat.PRODUCTS if p["name"] == self.what.get())
             picks = item["picks"] if item else cat.default_picks(p)
             for o in p["options"]:
                 self.option_vars[o["key"]] = combo(o["label"], o["choices"], o["choices"][picks.get(o["key"], 0)])
-            self.option_vars["qty"] = combo("Quantity", [str(q) for q in p["qty"]], str(item["qty"] if item else p["qty"][0]))
+            label = "Quantity (A4 label sheets)" if p["id"] == "labels" else "Quantity"
+            self.option_vars["qty"] = combo(label, [str(q) for q in p["qty"]], str(item["qty"] if item else p["qty"][0]),
+                                            typed=True)  # any number of 1 or more; the list only offers the usual ones
+        # Services (Extras sheet): ticked on any item; per piece on a document: staff type how many.
+        self.service_vars = {}
+        chosen = (item or {}).get("services") or {}
+        if pl.services:
+            ttk.Label(self.options, text="Services:").grid(row=row, column=0, sticky="nw", pady=(6, 3))
+            box = ttk.Frame(self.options)
+            box.grid(row=row, column=1, sticky="w", pady=(6, 3))
+            for k, name in enumerate(pl.services):
+                tick = tk.BooleanVar(value=name in chosen)
+                ttk.Checkbutton(box, text=name, variable=tick).grid(row=k, column=0, sticky="w")
+                count = tk.StringVar(value=str(chosen[name]) if isinstance(chosen.get(name), int)
+                                     and not isinstance(chosen.get(name), bool) else "")
+                if self.what.get() == "Document" and pl.services[name][1] == "piece":
+                    ttk.Label(box, text="how many:").grid(row=k, column=1, sticky="e", padx=(10, 4))
+                    ttk.Entry(box, textvariable=count, width=6, font=FONT).grid(row=k, column=2, sticky="w")
+                self.service_vars[name] = (tick, count)
+            row += 1
         self.show_box()
         theme.on_surface(self.editor)
 
@@ -784,15 +806,29 @@ class QuoteScreen(Screen):
                     "color_pages": v["color_pages"].get().strip(), "sides": SIDE_CHOICES[v["sides"].get()],
                     "per_side": int(v["per_side"].get()), "paper": v["paper"].get(),
                     "finish": FINISH_CHOICES[v["finish"].get()], "lam": bool(v["lam"].get()),
-                    "lam_sheets": whole("lam_sheets", "Sheets to laminate", 0)}
+                    "lam_sheets": whole("lam_sheets", "Sheets to laminate", 0), "cuts": whole("cuts", "Cuts", 0)}
             if item["color"] == "mixed" and not walkin_pricing.page_set(item["color_pages"], item["pages"]):
                 raise ValueError("Colour pages: say which pages are in colour (e.g. 1, 3-5).")
             if item["copies"] > 999:
                 raise ValueError("Copies: 999 at most.")
-            return item
-        p = next(p for p in cat.PRODUCTS if p["name"] == self.what.get())
-        picks = {o["key"]: o["choices"].index(v[o["key"]].get()) for o in p["options"]}
-        return {"kind": "product", "product": p["id"], "qty": int(v["qty"].get()), "picks": picks}
+        else:
+            p = next(p for p in cat.PRODUCTS if p["name"] == self.what.get())
+            picks = {o["key"]: o["choices"].index(v[o["key"]].get()) for o in p["options"]}
+            qty = v["qty"].get().strip()
+            if not qty.isdigit() or int(qty) < 1:
+                raise ValueError("Quantity: a whole number of 1 or more.")
+            item = {"kind": "product", "product": p["id"], "qty": int(qty), "picks": picks}
+        services = {}
+        for name, (tick, count) in getattr(self, "service_vars", {}).items():
+            if not tick.get():
+                continue
+            text = count.get().strip()
+            if text and not text.isdigit():
+                raise ValueError(f"{name}: how many is a whole number (not money).")
+            services[name] = int(text) if text else True
+        if services:
+            item["services"] = services
+        return item
 
     def add_item(self):
         try:
@@ -829,6 +865,8 @@ class QuoteScreen(Screen):
         if sel[0].startswith("f:"):
             _, i, k = sel[0].split(":")
             return int(i), int(k)
+        if sel[0].startswith("w:"):  # a working line: its item
+            return int(sel[0].split(":")[1]), None
         return int(sel[0]), None
 
     def edit_item(self):
@@ -874,7 +912,7 @@ class QuoteScreen(Screen):
             return
         row = self.tree.identify_row(y - self.tree.winfo_rooty())
         if row:
-            i = int(row.split(":")[1]) if row.startswith("f:") else int(row)
+            i = int(row.split(":")[1]) if row.startswith(("f:", "w:")) else int(row)
         elif len(self.items) == 1:
             i = 0
         else:
@@ -929,8 +967,10 @@ class QuoteScreen(Screen):
         self.drops = (self.drops + [[] for _ in self.items])[:len(self.items)]
         notes = []
         for i, (item, line) in enumerate(zip(self.items, self.priced["lines"])):
-            text = walkin_pricing.describe(item) + ("  · priced together" if line["note"] else "")
+            text = walkin_pricing.describe(item)
             self.tree.insert("", "end", iid=str(i), values=(i + 1, text, euro(line["price"])), open=True)
+            for k, work in enumerate(line["working"][1:-1]):  # how the price is worked out (2026-11-17_08)
+                self.tree.insert(str(i), "end", iid=f"w:{i}:{k}", values=("", f"      {work}", ""), tags=("working",))
             for k, path in enumerate(self.drops[i] if i < len(self.drops) else []):
                 self.tree.insert(str(i), "end", iid=f"f:{i}:{k}",
                                  values=("", f"      📎 {Path(path).name}   (select it and press Remove to take it off)", ""))
@@ -941,7 +981,7 @@ class QuoteScreen(Screen):
         self.notes.config(text="\n".join(notes))
         lines = [f"Items: {euro(sum(l['price'] for l in self.priced['lines']))}"]
         if self.priced["volume"]:
-            lines.append(f"Volume price (documents, never more for fewer pages): {euro(self.priced['volume'])}")
+            lines.append(f"Volume price (never more for fewer copies): {euro(self.priced['volume'])}")
         loyalty = self.priced["loyalty"]
         if loyalty:
             lines.append(f"{loyalty['text']}: -{euro(-loyalty['amount'])}" if loyalty["amount"] else loyalty["text"])
@@ -1174,7 +1214,9 @@ class OrderList(Screen):
         box.item_rows = []
         for i, item in enumerate(order["items"]):
             state = self.item_state(order, item)
-            line = ttk.Label(box, text=f"{i + 1}. {item['description']}   {euro(item['price'])}")
+            working = "   ·   ".join(item.get("working", [])[1:-1])  # how the price was worked out (2026-11-17_08)
+            line = ttk.Label(box, text=f"{i + 1}. {item['description']}   {euro(item['price'])}"
+                                       + (f"\n      {working}" if working else ""))
             line.grid(row=r, column=0, sticky="w")
             note = ttk.Label(box, text=f"     {state[0]}", style=state[1])
             note.grid(row=r + 1, column=0, sticky="w")

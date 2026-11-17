@@ -367,7 +367,7 @@ def place(items, priced, customer, source, loyalty_line, keep_data=True):
             sub = walkin_pricing.folder_name(i, item)
             (folder / sub).mkdir()
             out_items.append(dict(item, description=walkin_pricing.describe(item), folder=sub, price=line["price"],
-                                  note=line["note"], file=None, sheets=None))
+                                  note=line["note"], working=line.get("working", []), file=None, sheets=None))
         order = {"format": 1, "number": number, "source": source, "created": now(),
                  "customer": {"id": customer["id"], "name": customer.get("entered_name", customer["name"]),
                               "phone": customer.get("entered_phone", ""), "email": customer.get("entered_email", "")},

@@ -35,6 +35,8 @@ def paper_type_for(rules, paper_name, product=False):
     feed's mapping for documents), else the owner's rule by gsm (80: plain, up to 256: Thick 3, then Thick 4)."""
     if product and paper_name in rules.get("product_papers", {}):
         return rules["product_papers"][paper_name]
+    if paper_name == "Label sheet":  # walk-in Labels (2026-11-17_08): the driver's Labels type, Bypass Tray
+        return "Labels"
     if paper_name in DOC_PAPER_TYPES:
         return DOC_PAPER_TYPES[paper_name]
     gsm = routing.paper_gsm(paper_name)
@@ -118,7 +120,8 @@ def settings_for(rules, item, prepared):
         p = walkin_pricing.product_of(item)
         paper = cat.choice(p, "paper", item["picks"])
         both = cat.choice(p, "sides", item["picks"]) == "Both sides"
-        s = {"color": "color", "printer": "auto", "sides": "long" if both else "single",
+        colour = "bw" if cat.choice(p, "colour", item["picks"]) == "Black and white" else "color"  # Labels can be B&W
+        s = {"color": colour, "printer": "auto", "sides": "long" if both else "single",
              "paper": (prepared or {}).get("paper") or "A4", "per_side": "1",
              "paper_type": paper_type_for(rules, paper, product=True), "tray": TRAY,
              "copies": str(item.get("sheets") or 1), "rotate": "0", "product": True, "gsm": routing.paper_gsm(paper)}

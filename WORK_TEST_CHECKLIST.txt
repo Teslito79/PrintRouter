@@ -41,3 +41,8 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    customer...". Press Don't keep. The cover sheet shows name and phone. Collected: the order's folder
    is gone from Walk-in\Open, it is not in Customers (nor in the Recycle Bin), and
    Walk-in\sales_log.csv has its line with no name.
+11. Prices by hand (needs prices in Walk-in_Prices.xlsx): Get Quote, 250 business cards 85 x 55, Silk 300,
+   both sides. Work it out on paper: 32 A4 sheets (8 per A4), 64 colour copies, 8 cuts (4 x 2) per stack,
+   so 64 x your A4 colour copy price + 32 x the Silk 300 A4 sheet price + 8 x the price per cut. Then a
+   document: 10 pages, both sides, 2 copies, B&W: 20 copies + 10 sheets of Normal 80. ORCA's working
+   lines under each item and its prices must match your paper sums.
