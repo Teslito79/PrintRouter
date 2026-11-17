@@ -519,6 +519,67 @@ def finish(order, cancelled=False):
         return dest
 
 
+# ------------------------------------------------------------------ files dropped onto an item (2026-11-17)
+
+MAX_DROP = 200 * 1024 * 1024  # 200 MB (planning window)
+
+
+def drop_problem(path, kind):
+    """Why this file can't go onto an item of this kind ("document" / "product"), or None. Nothing is copied
+    when there is a problem."""
+    path = Path(path)
+    if path.is_dir():
+        return f"{path.name} is a folder: drop the files inside it instead."
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return f"{path.name} can't be read (was it moved, or is the USB stick out?)."
+    if size == 0:
+        return f"{path.name} is empty (0 bytes)."
+    if size > MAX_DROP:
+        return f"{path.name} is {size / 1024 / 1024:,.0f} MB: ORCA takes files up to 200 MB."
+    if kind == "document" and path.suffix.lower() not in DOC_TYPES:
+        return (f"{path.name}: a document takes PDF, pictures or Office files "
+                f"({', '.join(sorted(DOC_TYPES))}).")
+    return None
+
+
+def drop_conflicts(order, item, paths):
+    """The files already in the item's folder that the dropped ones would replace: for a document item the file
+    that prints now; for a product item a file of the same name."""
+    folder = order["_folder"] / item["folder"]
+    if item["kind"] == "document":
+        current = item_file(order, item)
+        return [current] if current else []
+    return [folder / Path(p).name for p in paths if (folder / Path(p).name).is_file()]
+
+
+def add_file(order, item, src, replace=()):
+    """Copy one dropped file into the item's folder (the original stays where it was), through a hidden temp file
+    so ORCA never sees half a file. `replace`: files of the folder to send to the Recycle Bin first (asked)."""
+    import cleanup
+    src = Path(src)
+    folder = order["_folder"] / item["folder"]
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in replace:
+        if Path(old).is_file():
+            why = cleanup.recycle(old)
+            if why:
+                raise OSError(f"could not move {Path(old).name} to the Recycle Bin: {why}")
+    dest = folder / src.name
+    tmp = folder / f".{src.name}.{uuid.uuid4().hex[:6]}.part"
+    try:
+        shutil.copy2(src, tmp)  # keeps the file's time: a dropped W100-2.pdf is not "still being saved"
+        os.replace(tmp, dest)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    return dest
+
+
 def matches(order, text):
     """Search: phone (any way written), name, email or order number (with or without #)."""
     t = text.strip().lower()

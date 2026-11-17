@@ -1,15 +1,21 @@
 """The walk-in screens (2026-11-17): Walk-in (Get Quote, Add Email, Print Jobs), the quote / email order screen,
 Print Jobs and Orders. Data in walkin_orders, prices in walkin_prices / walkin_pricing, printing in walkin_print,
 the print queue in walkin_queue. Walk-in orders are never mixed with PrintHub (website) orders.
+
+Files can be dropped from Explorer onto an item wherever an open order's items show (filedrop.py): they are copied
+into the item's folder (the original stays), or kept with the quote until Place order.
 """
 import datetime
 import math
 import os
+import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import messagebox, ttk
 
 import copier_queue
 import costs
+import filedrop
 import theme
 import walkin_catalogue as cat
 import walkin_orders as wo
@@ -57,6 +63,101 @@ def when(text):
     return f"{d.day} {d:%b %H:%M}"
 
 
+DROP_TEXT = {"product": "⤓  Drop the customer's file here", "document": "⤓  Drop the file to print here"}
+
+
+def drop_area(parent, kind, on_drop):
+    """The box under an item that files can be dropped on (filedrop.py): on_drop(paths, x, y)."""
+    label = tk.Label(parent, text=DROP_TEXT[kind], background=theme.FIELD, foreground=theme.MUTED,
+                     font=("Segoe UI", 10), padx=12, pady=3, highlightthickness=1,
+                     highlightbackground=theme.BORDER, highlightcolor=theme.BORDER, anchor="w", justify="left")
+    return filedrop.target(label, on_drop)
+
+
+def ask_item(parent, labels):
+    """Which item files dropped on a whole order are for: its index, or None (Cancel)."""
+    dlg = tk.Toplevel(parent)
+    dlg.title("ORCA - which item?")
+    dlg.transient(parent)
+    f = ttk.Frame(dlg, padding=18)
+    f.grid()
+    ttk.Label(f, text="This order has several items. Which one is the file for?").grid(row=0, column=0, sticky="w",
+                                                                                        pady=(0, 8))
+    choice = {"index": None}
+
+    def pick(k):
+        choice["index"] = k
+        dlg.destroy()
+
+    for i, text in enumerate(labels):
+        ttk.Button(f, text=text, command=lambda k=i: pick(k)).grid(row=i + 1, column=0, sticky="we", pady=2)
+    ttk.Button(f, text="Cancel", command=dlg.destroy).grid(row=len(labels) + 1, column=0, sticky="e", pady=(10, 0))
+    theme.dark_title_bar(dlg)
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return choice["index"]
+
+
+def check_drop(parent, kind, paths):
+    """True when the dropped files can go onto an item of this kind; else says why (nothing is copied)."""
+    problems = [p for p in (wo.drop_problem(x, kind) for x in paths) if p]
+    if problems:
+        messagebox.showwarning(parent=parent, title="ORCA", message="\n".join(problems) + "\n\nNothing was copied.")
+        return False
+    if kind == "document" and len(paths) > 1:
+        messagebox.showwarning(parent=parent, title="ORCA", message="A document item takes one file: drop only the "
+                                                                    "file to print.\n\nNothing was copied.")
+        return False
+    return True
+
+
+def drop_onto_item(parent, order, index, paths, done):
+    """Copy dropped files into an item's folder (asks before replacing a file); done(text, failed) afterwards."""
+    item = order["items"][index]
+    if not check_drop(parent, item["kind"], paths):
+        return
+    conflicts = wo.drop_conflicts(order, item, paths)
+    if conflicts and not messagebox.askyesno(
+            parent=parent, title="ORCA",
+            message=f"#{order['number']} item {index + 1} already has {', '.join(c.name for c in conflicts)}.\n\n"
+                    f"Replace it with {', '.join(Path(x).name for x in paths)}? The old file goes to the Recycle Bin."):
+        return
+    tasks = [(order, item, x, conflicts if item["kind"] == "document" else
+              [c for c in conflicts if c.name == Path(x).name]) for x in paths]
+    copy_in_background(parent, tasks, done)
+
+
+def copy_in_background(widget, tasks, done):
+    """Copy [(order, item, source, files it replaces)] on a thread (a big file from a USB stick takes a while);
+    done(text, failed) on the Tk thread once all are copied."""
+    result = {}
+
+    def work():
+        copied, failed = [], []
+        for order, item, src, replace in tasks:
+            try:
+                wo.add_file(order, item, src, replace)
+                copied.append(f"#{order['number']} item {wo.item_index(order, item)}: {Path(src).name}")
+            except OSError as e:
+                failed.append(f"{Path(src).name}: {e}")
+        result["value"] = (copied, failed)
+
+    def wait():
+        try:
+            if "value" not in result:
+                widget.after(100, wait)
+                return
+        except tk.TclError:
+            return
+        copied, failed = result["value"]
+        if failed:
+            messagebox.showwarning(parent=widget, title="ORCA", message="Not copied:\n" + "\n".join(failed))
+        done(("Copied " + "; ".join(copied)) if copied else "", failed)
+
+    threading.Thread(target=work, daemon=True).start()
+    widget.after(100, wait)
+
+
 class Screen:
     """A screen window: title bar text, Back at the top left, closing with the X goes back too."""
 
@@ -89,6 +190,7 @@ class Screen:
 
     def ready(self):
         theme.dark_title_bar(self.win)
+        filedrop.enable(self.win)  # files dropped from Explorer onto an item
 
     def show(self):
         self.win.deiconify()
@@ -153,6 +255,7 @@ class QuoteScreen(Screen):
         super().__init__(ctx, "Get Quote" if mode == "quote" else "Add Email", on_back, size="1320x900")
         self.mode = mode
         self.items = []
+        self.drops = []  # per item: files dropped on it, copied into its folder at Place order
         self.editing = None  # index of the item being edited
         self.option_vars = {}
         self.filled_from = None  # the customer whose details were filled in
@@ -197,6 +300,9 @@ class QuoteScreen(Screen):
         row.grid(row=1, column=0, sticky="w", pady=(6, 0))
         ttk.Button(row, text="Edit", command=self.edit_item).pack(side="left")
         ttk.Button(row, text="Remove", command=self.remove_item).pack(side="left", padx=(8, 0))
+        ttk.Label(row, text="Drop a customer's file onto an item: it goes into the order's folder at Place order.",
+                  style="Small.TLabel").pack(side="left", padx=(16, 0))
+        filedrop.target(self.tree, self.drop_on_list)
         self.notes = ttk.Label(right, text="", style="Small.TLabel", justify="left", wraplength=760)
         self.notes.grid(row=2, column=0, sticky="w", pady=(4, 0))
         totals = ttk.Frame(right)
@@ -331,16 +437,29 @@ class QuoteScreen(Screen):
         self.editor_error.config(text="")
         if self.editing is None:
             self.items.append(item)
+            self.drops.append([])
         else:
+            if self.items[self.editing]["kind"] != item["kind"]:
+                self.drops[self.editing] = []  # a document's file is no product's design (and back)
             self.items[self.editing] = item
         self.cancel_edit()
         self.reprice()
 
-    def edit_item(self):
+    def selected(self):
+        """(item index, file index or None) of the selected row, or None."""
         sel = self.tree.selection()
         if not sel:
+            return None
+        if sel[0].startswith("f:"):
+            _, i, k = sel[0].split(":")
+            return int(i), int(k)
+        return int(sel[0]), None
+
+    def edit_item(self):
+        sel = self.selected()
+        if not sel:
             return
-        self.editing = int(sel[0])
+        self.editing = sel[0]
         item = self.items[self.editing]
         self.what.set("Document" if item["kind"] == "document" else walkin_pricing.product_of(item)["name"])
         self.build_options(item)
@@ -356,11 +475,47 @@ class QuoteScreen(Screen):
         self.build_options()
 
     def remove_item(self):
-        sel = self.tree.selection()
-        if sel:
-            del self.items[int(sel[0])]
+        """Remove the selected item, or the selected dropped file (only ORCA's note of it: the file stays put)."""
+        sel = self.selected()
+        if not sel:
+            return
+        i, k = sel
+        if k is not None:
+            del self.drops[i][k]
+        else:
+            del self.items[i]
+            del self.drops[i]
             self.cancel_edit()
-            self.reprice()
+        self.reprice()
+
+    def drop_on_list(self, paths, x, y):
+        """Files dropped on the item list: kept with the item under the mouse (one item: that one; else asks)."""
+        if not self.items:
+            messagebox.showwarning(parent=self.win, title="ORCA", message="Add the item first, then drop its file "
+                                                                          "onto it.\n\nNothing was kept.")
+            return
+        row = self.tree.identify_row(y - self.tree.winfo_rooty())
+        if row:
+            i = int(row.split(":")[1]) if row.startswith("f:") else int(row)
+        elif len(self.items) == 1:
+            i = 0
+        else:
+            i = ask_item(self.win, [f"{k + 1}. {walkin_pricing.describe(it)}" for k, it in enumerate(self.items)])
+            if i is None:
+                return
+        kind = self.items[i]["kind"]
+        if not check_drop(self.win, kind, paths):
+            return
+        if kind == "document" and self.drops[i]:
+            if not messagebox.askyesno(parent=self.win, title="ORCA",
+                                       message=f"Item {i + 1} already has {Path(self.drops[i][0]).name}.\n\n"
+                                               f"Use {Path(paths[0]).name} instead?"):
+                return
+            self.drops[i] = []
+        for path in paths:
+            if path not in self.drops[i]:
+                self.drops[i].append(path)
+        self.reprice()
 
     # -------------------------------------------------------------- prices
 
@@ -373,13 +528,17 @@ class QuoteScreen(Screen):
         self.priced = walkin_pricing.price_order(pl, self.items, self.loyalty_level())
         keep = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
+        self.drops = (self.drops + [[] for _ in self.items])[:len(self.items)]
         notes = []
         for i, (item, line) in enumerate(zip(self.items, self.priced["lines"])):
             text = walkin_pricing.describe(item) + ("  · priced together" if line["note"] else "")
-            self.tree.insert("", "end", iid=str(i), values=(i + 1, text, euro(line["price"])))
+            self.tree.insert("", "end", iid=str(i), values=(i + 1, text, euro(line["price"])), open=True)
+            for k, path in enumerate(self.drops[i] if i < len(self.drops) else []):
+                self.tree.insert(str(i), "end", iid=f"f:{i}:{k}",
+                                 values=("", f"      📎 {Path(path).name}   (select it and press Remove to take it off)", ""))
             if line["note"] and line["note"] not in notes:
                 notes.append(line["note"])
-        if keep and keep[0] in self.tree.get_children():
+        if keep and self.tree.exists(keep[0]):
             self.tree.selection_set(keep)
         self.notes.config(text="\n".join(notes))
         lines = [f"Items: {euro(sum(l['price'] for l in self.priced['lines']))}"]
@@ -464,8 +623,23 @@ class QuoteScreen(Screen):
         except OSError:
             pass
         self.placed_number = order["number"]
-        NumberDialog(self.win, order)
+        dialog = NumberDialog(self.win, order)
+        # Files dropped on the quote's items: copied into the item folders now (the originals stay where they are).
+        tasks, problems = [], []
+        for item, files in zip(order["items"], self.drops):
+            for path in files:
+                why = wo.drop_problem(path, item["kind"])
+                if why:
+                    problems.append(why)
+                else:
+                    tasks.append((order, item, path, []))
+        if problems:
+            messagebox.showwarning(parent=self.win, title="ORCA", message="Not copied into the order:\n"
+                                                                          + "\n".join(problems))
+        if tasks:
+            copy_in_background(dialog.dlg, tasks, dialog.copied)
         self.items = []
+        self.drops = []
         self.changed.set("")
         for v in self.cust_vars.values():
             v.set("")
@@ -475,9 +649,10 @@ class QuoteScreen(Screen):
 
 
 class NumberDialog:
-    """The new order's number, large."""
+    """The new order's number, large, and its items, each with a drop area for its file."""
 
     def __init__(self, parent, order):
+        self.order = order
         self.dlg = dlg = tk.Toplevel(parent)
         dlg.title("ORCA - order placed")
         dlg.transient(parent)
@@ -486,10 +661,47 @@ class NumberDialog:
         ttk.Label(f, text="Order placed").grid(row=0, column=0)
         ttk.Label(f, text=f"#{order['number']}", style="Huge.TLabel").grid(row=1, column=0, pady=10)
         ttk.Label(f, text=f"{customer_text(order['customer'])}\n{euro(wo.price_due(order))}\n"
-                          f"Put each item's file into its folder (it is open in Explorer).",
+                          f"Drop each item's file onto it below, or put it into its folder (open in Explorer).",
                   justify="center").grid(row=2, column=0)
-        ttk.Button(f, text="OK", style="Print.TButton", command=dlg.destroy).grid(row=3, column=0, pady=(16, 0))
+        items = ttk.Frame(f)
+        items.grid(row=3, column=0, sticky="we", pady=(12, 0))
+        self.areas = []
+        for i, item in enumerate(order["items"]):
+            ttk.Label(items, text=f"{i + 1}. {item['description']}", wraplength=560, justify="left").grid(
+                row=2 * i, column=0, sticky="w", pady=(6, 0))
+            area = drop_area(items, item["kind"], lambda paths, x, y, k=i: self.drop(k, paths))
+            area.grid(row=2 * i + 1, column=0, sticky="we", padx=(18, 0))
+            self.areas.append(area)
+        self.status = ttk.Label(f, text="", style="Small.TLabel", wraplength=600, justify="center")
+        self.status.grid(row=4, column=0, pady=(8, 0))
+        ttk.Button(f, text="OK", style="Print.TButton", command=dlg.destroy).grid(row=5, column=0, pady=(16, 0))
         theme.dark_title_bar(dlg)
+        filedrop.enable(dlg)
+        self.refresh()
+
+    def drop(self, index, paths):
+        drop_onto_item(self.dlg, self.order, index, paths, self.copied)
+
+    def copied(self, text, failed):
+        try:
+            self.status.config(text=text)
+            self.refresh()
+        except tk.TclError:
+            pass  # closed meanwhile: the files are in the folders anyway
+
+    def refresh(self):
+        """Each item's drop area names the files in its folder (ORCA's own .cdr and Options.txt left out)."""
+        for item, area in zip(self.order["items"], self.areas):
+            if item["kind"] == "document":
+                f = wo.item_file(self.order, item)
+                names = [f.name] if f else []
+            else:
+                f = wo.item_file(self.order, item)
+                names = [p.name for p in wo.customer_files(self.order, item)] + ([f.name] if f else [])
+            if names:
+                area.config(text=f"✓ {', '.join(names)}   (drop here to add or replace)", foreground=theme.OK)
+            else:
+                area.config(text=DROP_TEXT[item["kind"]], foreground=theme.MUTED)
 
 
 # ------------------------------------------------------------------ shared order cards
@@ -550,19 +762,57 @@ class OrderList(Screen):
         ttk.Label(box, text=f"Placed {when(times['placed'])}   ·   printed {when(times['printed'])}   ·   "
                             f"ready {when(times['ready'])}", style="Small.TLabel").grid(row=0, column=0, sticky="w")
         r = 1
+        droppable = self.can_drop(order)
         box.item_rows = []
         for i, item in enumerate(order["items"]):
             state = self.item_state(order, item)
-            ttk.Label(box, text=f"{i + 1}. {item['description']}   {euro(item['price'])}").grid(row=r, column=0, sticky="w")
-            ttk.Label(box, text=f"     {state[0]}", style=state[1]).grid(row=r + 1, column=0, sticky="w")
+            line = ttk.Label(box, text=f"{i + 1}. {item['description']}   {euro(item['price'])}")
+            line.grid(row=r, column=0, sticky="w")
+            note = ttk.Label(box, text=f"     {state[0]}", style=state[1])
+            note.grid(row=r + 1, column=0, sticky="w")
             box.item_rows.append(r)
             r += 2
+            if droppable:
+                on_drop = (lambda paths, x, y, k=i: self.drop_on_item(order, k, paths))
+                filedrop.target(line, on_drop)
+                filedrop.target(note, on_drop)
+                drop_area(box, item["kind"], on_drop).grid(row=r, column=0, sticky="w", padx=(22, 0), pady=(2, 4))
+                r += 1
+        if droppable:
+            filedrop.target(box, lambda paths, x, y: self.drop_on_order(order, paths))
         row = ttk.Frame(box)
         row.grid(row=r, column=0, sticky="w", pady=(6, 0))
         for text, command, style in buttons:
             ttk.Button(row, text=text, command=command, style=style or "TButton").pack(side="left", padx=(0, 8))
         theme.on_surface(box)
         return box
+
+    def can_drop(self, order):
+        """Files can be dropped onto an order still waiting or ready, not while a copier prints it."""
+        parts = order.get("parts") or {}
+        return order["status"] in ("waiting", "ready_to_print") and not any(
+            p["state"] == "printing" for p in parts.values())
+
+    def drop_on_order(self, order, paths):
+        """Dropped on the order, not on an item: its one item, or the item staff pick."""
+        if len(order["items"]) == 1:
+            index = 0
+        else:
+            index = ask_item(self.win, [f"{i + 1}. {item['description']}" for i, item in enumerate(order["items"])])
+            if index is None:
+                return
+        self.drop_on_item(order, index, paths)
+
+    def drop_on_item(self, order, index, paths):
+        drop_onto_item(self.win, order, index, paths, self.copied)
+
+    def copied(self, text, failed):
+        try:
+            if text:
+                self.status.config(text=text)
+            self.signature = None
+        except tk.TclError:
+            pass
 
     def item_state(self, order, item):
         if item["kind"] == "product":

@@ -8,15 +8,24 @@ folder C:\PrintRouter\ADMIN) and type go.
 Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
 --------------------------------------------------------------------
 1. Get Quote: a small order (an A4 B&W document, 2 pages x 2) for a test customer. Place it, put a
-   PDF in its folder, Print Jobs, Print. The cover sheet comes out first: plain A4, black and white,
+   PDF in its folder, Print Jobs, Print now. The cover sheet comes out first: plain A4, black and white,
    one side, with the name, phone, the number large, the total and the items. Then the document.
 2. A colour product (e.g. 100 business cards, a laid-out A4 PDF, confirm 13 sheets): it prints at
    actual size on the routed copier from the Bypass Tray, on the cover sheet's copier after it.
-3. Both sides on heavy paper (Silk 300, Both sides): fronts, the 'turn the stack' box, backs. Does
-   each back land on its own front, the right way up?
+3. Both sides on heavy paper (Silk 300, Both sides): fronts, then Print backs on the copier's block,
+   backs. Does each back land on its own front, the right way up?
 4. Counter, Today: the test prints show under Walk-in with #<number> (the cover sheet as one A4
    B&W side). Then Orders: Ready for pickup, Collected; the folder is in Walk-in\Customers.
 5. Walk-in layout: Get Quote with 50 A5 flyers, Place order. The flyer folder has W<n>-1.cdr and
    Options.txt. Drop the customer's design in (it shows as a customer file, 'Waiting for layout'),
    lay it out in W<n>-1.cdr, export W<n>-1.pdf into the same folder, Orders > Layout done (25
-   sheets suggested), then Print Jobs > Print: only W<n>-1.pdf prints, at actual size.
+   sheets suggested), then Print Jobs > Print now: only W<n>-1.pdf prints, at actual size.
+6. Queue: three test customers, two copiers. A: two B&W orders; B: a B&W order of 30 sheets; C: a B&W
+   order of 2 sheets; and a colour order for A. Print Jobs > Start printing orders: the IM C4510 prints
+   A's two orders (each with its cover sheet), the IM C3000 A's colour order. Drag C's line above B's in
+   the IM C4510's list (a blue line shows where it lands). Pages collected on the IM C4510: C prints next.
+   Close and reopen ORCA: the order of the list is the same.
+7. Drop: Get Quote, a document item, Place order. Drag a PDF from Explorer (or a USB stick) onto
+   'Drop the file to print here' in the window that shows the number: it is copied into the item's
+   folder (the original stays) and the order shows Ready to print. Drag a second PDF onto it: ORCA
+   asks before replacing.
