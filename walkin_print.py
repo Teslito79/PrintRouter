@@ -5,11 +5,9 @@ sheet first, every print logged in print_log.csv as source walk-in with the orde
   and colour; products: the laid-out PDF must be A4 or A3), so the screen never waits.
 - settings_for / job_for: the print settings of an item (staff can override them per item, kept in order.json).
 - cover_pdf: the plain A4 cover sheet (customer, number, total, date, items).
-- Sender: sends one order after the other on its own thread: the cover sheet on the copier of the order's first
-  part, before that part, then each copier's items; hand-turned items wait for "turn the stack" (asked on screen).
+- The queue that sends them (customer batches per copier, Pages collected, Print backs): walkin_queue.py.
 """
 import datetime
-import math
 import queue
 import re
 import tempfile
@@ -260,57 +258,3 @@ def _wrap(w, text, size, bold=False):
     if line:
         out.append(line)
     return out or [""]
-
-
-# ------------------------------------------------------------------ sending
-
-class Sender:
-    """Sends planned orders one after another on its own thread; messages for the screen go to self.results."""
-
-    def __init__(self, shared_jobs):
-        self.jobs = shared_jobs
-        self.todo = queue.Queue()
-        self.results = queue.Queue()
-        self.sending = set()  # copiers in use by the current order (busy for the colour choice)
-        self.active = 0
-        shared_jobs.busy_sources.append(lambda: set(self.sending))
-        threading.Thread(target=self._work, daemon=True).start()
-
-    def busy(self):
-        return self.active > 0
-
-    def send(self, order, plan):
-        """plan: [(printer, [(item index or None for the cover, job, pdf)])] in the order to send."""
-        self.active += 1
-        self.todo.put((order, plan))
-
-    def _work(self):
-        while True:
-            order, plan = self.todo.get()
-            self.sending = {printer for printer, _ in plan}
-            failed = None
-            try:
-                for printer, parts in plan:
-                    for index, job, pdf in parts:
-                        label = self.jobs.printers[printer]["label"]
-                        name = COVER if index is None else order["items"][index]["folder"]
-                        self.results.put(("progress", order["number"], f"#{order['number']}: {name} → {label}…"))
-                        work = WORK_DIR / f"send_{order['number']}_{index}"
-                        work.mkdir(parents=True, exist_ok=True)
-                        if job.get("hand"):
-                            self.jobs.print_one(work, job, pdf, pdf, job["paper"], None, side="fronts")
-                            answer = {"event": threading.Event(), "ok": False}
-                            self.results.put(("turn", order["number"], name, label, answer))
-                            answer["event"].wait()
-                            if not answer["ok"]:
-                                raise RuntimeError(f"{name}: the fronts were sent, the backs were NOT")
-                            self.jobs.print_one(work, job, pdf, pdf, job["paper"], None, side="backs")
-                        else:
-                            self.jobs.print_one(work, job, pdf, pdf, job["paper"], None)
-                        job["log_info"] = log_info(order, None if index is None else order["items"][index])
-                        self.jobs.log(job, label)
-            except Exception as e:
-                failed = str(e)
-            self.sending = set()
-            self.active -= 1
-            self.results.put(("done", order["number"], failed))

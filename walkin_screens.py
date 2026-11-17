@@ -1,6 +1,6 @@
 """The walk-in screens (2026-11-17): Walk-in (Get Quote, Add Email, Print Jobs), the quote / email order screen,
-Print Jobs and Orders. Data in walkin_orders, prices in walkin_prices / walkin_pricing, printing in walkin_print.
-Walk-in orders are never mixed with PrintHub (website) orders.
+Print Jobs and Orders. Data in walkin_orders, prices in walkin_prices / walkin_pricing, printing in walkin_print,
+the print queue in walkin_queue. Walk-in orders are never mixed with PrintHub (website) orders.
 """
 import datetime
 import math
@@ -8,7 +8,7 @@ import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-import analyze
+import copier_queue
 import costs
 import theme
 import walkin_catalogue as cat
@@ -16,6 +16,7 @@ import walkin_orders as wo
 import walkin_prices
 import walkin_pricing
 import walkin_print
+import walkin_queue
 
 FONT = costs.FONT
 COLOUR_CHOICES = {"B&W": "bw", "Colour": "color", "Some pages in colour": "mixed"}
@@ -510,6 +511,7 @@ class OrderList(Screen):
             return
         self.handle_results()
         orders = [wo.refresh(o) for o in wo.list_open()]
+        self.got_orders(orders)
         sig = self.signature_of(orders)
         if sig != self.signature:
             self.signature = sig
@@ -525,10 +527,15 @@ class OrderList(Screen):
     def handle_results(self):
         pass
 
+    def got_orders(self, orders):
+        """The open orders as just read (the print queue's states and the order lines follow them)."""
+        self.ctx.print_queue.update(orders)
+
     def signature_of(self, orders):
-        prep = self.ctx.preparer
-        return tuple((o["number"], o["status"], o.get("changed_total"), tuple(
-            (i.get("file"), i.get("sheets"), str(i.get("print")), bool(prep.get(o, i))) for i in o["items"]))
+        prep, run = self.ctx.preparer, self.ctx.print_queue
+        return tuple((o["number"], o["status"], o.get("changed_total"), run.order_state(o), tuple(
+            (i.get("file"), i.get("sheets"), str(i.get("print")), bool(prep.get(o, i)),
+             tuple(p.name for p in wo._files(o, i))) for i in o["items"]))
             for o in orders) + (self.extra_signature(),)
 
     def extra_signature(self):
@@ -543,10 +550,12 @@ class OrderList(Screen):
         ttk.Label(box, text=f"Placed {when(times['placed'])}   ·   printed {when(times['printed'])}   ·   "
                             f"ready {when(times['ready'])}", style="Small.TLabel").grid(row=0, column=0, sticky="w")
         r = 1
-        for i, item in enumerate(order["items"], start=1):
+        box.item_rows = []
+        for i, item in enumerate(order["items"]):
             state = self.item_state(order, item)
-            ttk.Label(box, text=f"{i}. {item['description']}   {euro(item['price'])}").grid(row=r, column=0, sticky="w")
+            ttk.Label(box, text=f"{i + 1}. {item['description']}   {euro(item['price'])}").grid(row=r, column=0, sticky="w")
             ttk.Label(box, text=f"     {state[0]}", style=state[1]).grid(row=r + 1, column=0, sticky="w")
+            box.item_rows.append(r)
             r += 2
         row = ttk.Frame(box)
         row.grid(row=r, column=0, sticky="w", pady=(6, 0))
@@ -597,132 +606,348 @@ class OrderList(Screen):
 # ------------------------------------------------------------------ Print Jobs
 
 class PrintJobsScreen(OrderList):
-    """Orders ready to print, grouped by customer; nothing prints until Print (or Print all) is pressed."""
+    """The copier queue (walkin_queue.py) and the orders ready to print, grouped by customer. Nothing is sent until
+    Start printing orders (every free copier takes its first customer) or Print now (one order, free copiers only).
+    Each copier's block shows what it prints, its buttons and its waiting customers, which staff drag into another
+    order (or Move up / Move down)."""
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Print Jobs", on_back)
-        self.sending = {}  # order number -> "sending" / error text
+        self.win.geometry("1320x960")
+        self.run = ctx.print_queue
+        self.run.parent = self.win
+        ttk.Button(self.top, text="Start printing orders", style="Print.TButton", command=self.start).pack(
+            side="left", padx=(40, 0))
+        ttk.Button(self.top, text="Stop printing orders", command=self.stop).pack(side="left", padx=(10, 0))
+        bar = ttk.Frame(self.frame)
+        bar.grid(row=1, column=0, sticky="we", pady=(8, 0))
+        bar.columnconfigure(0, weight=1)
+        self.run_label = ttk.Label(bar, text="", style="Small.TLabel")
+        self.run_label.grid(row=0, column=0, sticky="w")
+        blocks = ttk.Frame(bar)
+        blocks.grid(row=1, column=0, sticky="we", pady=(6, 0))
+        self.panels = {}
+        self.drag = None
+        for n, (pid, p) in enumerate(ctx.rules["printers"].items()):
+            blocks.columnconfigure(n, weight=1, uniform="copiers")
+            box = ttk.LabelFrame(blocks, text=p["label"], padding=8, style="Section.TLabelframe")
+            box.grid(row=0, column=n, sticky="nsew", padx=(0 if n == 0 else 8, 0))
+            box.columnconfigure(0, weight=1)
+            state = ttk.Label(box, text="", wraplength=380, justify="left", font=("Segoe UI", 11, "bold"))
+            state.grid(row=0, column=0, sticky="w")
+            buttons = ttk.Frame(box)
+            buttons.grid(row=1, column=0, sticky="w", pady=4)
+            ttk.Label(box, text="Waiting (drag to change the order):", style="Small.TLabel").grid(row=2, column=0,
+                                                                                                 sticky="w")
+            tree = ttk.Treeview(box, show="tree", height=6, selectmode="browse")
+            tree.column("#0", width=380, stretch=True)
+            tree.tag_configure("join", background=theme.SELECT)
+            tree.grid(row=3, column=0, sticky="we")
+            tree.bind("<ButtonPress-1>", lambda e, k=pid: self.press(k, e))
+            tree.bind("<B1-Motion>", lambda e, k=pid: self.motion(k, e))
+            tree.bind("<ButtonRelease-1>", lambda e, k=pid: self.release(k, e))
+            moves = ttk.Frame(box)
+            moves.grid(row=4, column=0, sticky="w", pady=(4, 0))
+            ttk.Button(moves, text="Move up", command=lambda k=pid: self.move(k, -1)).pack(side="left")
+            ttk.Button(moves, text="Move down", command=lambda k=pid: self.move(k, 1)).pack(side="left", padx=(8, 0))
+            line = tk.Frame(tree, height=3, background=theme.PRIMARY)
+            self.panels[pid] = {"state": state, "buttons": buttons, "tree": tree, "line": line, "button_sig": None,
+                                "tree_sig": None, "batches": []}
+            theme.on_surface(box)
+        self.refresh_panels()
         self.ready()
         self.poll()
+        self.quick()
+
+    def quick(self):
+        """The copier blocks follow the sending closely (the order cards every 1.5 s, with the poll)."""
+        if not self.win.winfo_exists():
+            return
+        self.handle_results()
+        self.refresh_panels()
+        self.win.after(400, self.quick)
 
     def back(self):
-        if self.ctx.sender.busy():
-            self.win.bell()
-            return
+        self.run.parent = self.ctx.win  # the queue carries on behind the menu
         super().back()
 
-    def extra_signature(self):
-        return tuple(sorted(self.sending.items()))
+    # -------------------------------------------------------------- run
+
+    def start(self):
+        self.run.start_printing()
+        self.refresh_panels()
+        self.signature = None
+
+    def stop(self):
+        self.run.stop_printing()
+        self.refresh_panels()
 
     def handle_results(self):
-        try:
-            while True:
-                msg = self.ctx.sender.results.get_nowait()
-                if msg[0] == "progress":
-                    self.status.config(text=msg[2])
-                elif msg[0] == "turn":
-                    _, number, name, label, answer = msg
-                    answer["ok"] = messagebox.askokcancel(
-                        parent=self.win, title="ORCA",
-                        message=f"#{number}: the fronts of {name} were sent to {label}.\n\nWhen they are all out, turn "
-                                f"the stack over, put it back in the Bypass Tray, then click OK to print the backs.\n\n"
-                                f"Cancel: the backs are not printed.")
-                    answer["event"].set()
-                elif msg[0] == "done":
-                    _, number, failed = msg
-                    order = next((o for o in wo.list_open() if o["number"] == number), None)
-                    if failed:
-                        self.sending[number] = f"NOT all printed: {failed}"
-                        self.status.config(text=f"#{number}: {failed}")
-                    else:
-                        self.sending.pop(number, None)
-                        if order:
-                            wo.set_status(order, "printed")
-                        self.status.config(text=f"#{number} sent.")
-                    self.signature = None
-        except Exception:
-            pass
-        self.back_btn.config(state="disabled" if self.ctx.sender.busy() else "normal")
+        self.run.handle_results()
+        if self.run.messages:
+            self.status.config(text=self.run.messages[-1])
 
-    def plan(self, order):
-        """[(printer, [(item index or None, job, pdf)])]: the cover sheet first on the first part's copier."""
-        rules, shared = self.ctx.rules, self.ctx.jobs
-        parts = {}
-        for i, item in enumerate(order["items"]):
-            prepared = self.ctx.preparer.get(order, item)
-            if prepared is None:
-                raise ValueError(f"item {i + 1} is still being checked: try again in a moment")
-            if "error" in prepared:
-                raise ValueError(f"item {i + 1}: {prepared['error']}")
-            job = walkin_print.job_for(shared, rules, item, prepared)
-            if job is None:
-                raise ValueError(f"item {i + 1}: these settings can't print")
-            if job["problem"]:
-                raise ValueError(f"item {i + 1}: {job['problem']}")
-            job["file_name"] = f"#{order['number']} {item['folder']}"
-            parts.setdefault(job["printer"], []).append((i, job, prepared["pdf"]))
-        first = next(iter(parts))
-        cover = walkin_print.WORK_DIR / f"cover_{order['number']}.pdf"
-        cover.parent.mkdir(parents=True, exist_ok=True)
-        import jobs as jobs_module
-        with jobs_module.PDF_LOCK:
-            walkin_print.cover_pdf(order, cover)
-            cover_pages = analyze.page_count(cover)
-        cjob = walkin_print.cover_job(shared, first, cover_pages)
-        if cjob is None or cjob["problem"]:
-            raise ValueError(f"the cover sheet can't print on {shared.printers[first]['label']}"
-                             + (f": {cjob['problem']}" if cjob else ""))
-        cjob["file_name"] = f"#{order['number']} {walkin_print.COVER}"
-        plan = [(first, [(None, cjob, cover)] + parts.pop(first))]
-        plan += list(parts.items())
-        return plan
+    def got_orders(self, orders):
+        self.run.update(orders)
+        self.refresh_panels()
 
-    def print_orders(self, orders):
-        for order in orders:
-            if order["number"] in self.sending and self.sending[order["number"]] == "sending":
-                continue
-            try:
-                plan = self.plan(order)
-            except ValueError as e:
-                messagebox.showwarning(parent=self.win, title="ORCA", message=f"#{order['number']} can't print yet: {e}")
-                continue
-            self.sending[order["number"]] = "sending"
-            self.ctx.sender.send(order, plan)
+    def extra_signature(self):
+        return tuple((pid, c["state"], tuple(c.get("orders", ()))) for pid, c in self.run.copiers.items())
+
+    def print_now(self, order):
+        message = self.run.print_now(order["number"])
+        if message:
+            messagebox.showwarning(parent=self.win, title="ORCA", message=message)
+        self.refresh_panels()
         self.signature = None
+
+    def collected(self, pid):
+        self.run.collected(pid)
+        self.refresh_panels()
+        self.signature = None
+
+    def send_backs(self, pid):
+        self.run.send_backs(pid)
+        self.refresh_panels()
+
+    def retry(self, pid):
+        self.run.retry(pid)
+        self.refresh_panels()
+
+    # -------------------------------------------------------------- the copier blocks
+
+    def refresh_panels(self):
+        self.run_label.config(text=copier_queue.run_text(self.run.running, "customer"))
+        for pid, panel in self.panels.items():
+            c = self.run.copiers[pid]
+            panel["state"].config(text=self.run.copier_text(pid),
+                                  foreground=theme.ERROR if c["state"] == "failed" else "")
+            buttons = {"sent": [("Pages collected", self.collected)], "turn": [("Print backs", self.send_backs)],
+                       "failed": [("Retry", self.retry)]}.get(c["state"], [])
+            sig = (c["state"], tuple(b[0] for b in buttons))
+            if sig != panel["button_sig"]:
+                panel["button_sig"] = sig
+                for w in panel["buttons"].winfo_children():
+                    w.destroy()
+                for text, command in buttons:
+                    ttk.Button(panel["buttons"], text=text, style="Print.TButton",
+                               command=lambda k=pid, f=command: f(k)).pack(side="left", padx=(0, 8))
+            if self.drag is None:
+                self.fill_queue(pid)
+
+    def fill_queue(self, pid):
+        """The copier's waiting batches: one line each, with its orders under it when it holds several."""
+        panel = self.panels[pid]
+        tree = panel["tree"]
+        batches = self.run.batches(pid)
+        lines = [(self.run.batch_text(pid, b), tuple(self.order_line(pid, n) for n in b) if len(b) > 1 else ())
+                 for b in batches]
+        sig = (tuple(map(tuple, batches)), tuple(lines))
+        if sig == panel["tree_sig"]:
+            return
+        selected = self.selected_numbers(pid)
+        panel["tree_sig"], panel["batches"] = sig, batches
+        tree.delete(*tree.get_children())
+        if not batches:
+            tree.insert("", "end", iid="none", text="No customer waiting", tags=("none",))
+        for k, (batch, (text, children)) in enumerate(zip(batches, lines)):
+            tree.insert("", "end", iid=f"b{k}", text=text, open=True)
+            for n, child in zip(batch, children):
+                tree.insert(f"b{k}", "end", iid=f"o{n}", text=child)
+        for iid in selected:
+            if tree.exists(iid):
+                tree.selection_set(iid)
+                break
+
+    def order_line(self, pid, number):
+        sheets, colour, side = self.run.batch_info(pid, [number])
+        cover = "" if self.run.cover_here(number, pid) else ", no cover sheet"
+        return f"#{number}  ({walkin_queue.sheets_text(sheets)}, {colour}, {side}{cover})"
+
+    def selected_numbers(self, pid):
+        """Row ids to select again after the list is rebuilt (the same order, or the batch now holding it)."""
+        tree, batches = self.panels[pid]["tree"], self.panels[pid]["batches"]
+        sel = tree.selection()
+        if not sel or sel[0] == "none":
+            return []
+        if sel[0].startswith("o"):
+            return [sel[0]]
+        first = batches[int(sel[0][1:])][0]
+        return [f"o{first}"] + [f"b{k}" for k, b in enumerate(self.run.batches(pid)) if first in b]
+
+    def batch_index(self, iid):
+        if iid.startswith("o"):
+            iid = self.panels_tree_parent(iid)
+        return int(iid[1:]) if iid.startswith("b") else None
+
+    def panels_tree_parent(self, iid):
+        for panel in self.panels.values():
+            if panel["tree"].exists(iid):
+                return panel["tree"].parent(iid)
+        return ""
+
+    def move(self, pid, step):
+        """Move up / Move down: the selected batch (or the batch of the selected order) one place."""
+        tree = self.panels[pid]["tree"]
+        sel = tree.selection()
+        if not sel or sel[0] == "none":
+            return
+        k = int((tree.parent(sel[0]) if sel[0].startswith("o") else sel[0])[1:])
+        batches = self.panels[pid]["batches"]
+        if not 0 <= k + step < len(batches):
+            return
+        first = batches[k][0]
+        self.run.move_batch(pid, k, k - 1 if step < 0 else k + 2)
+        self.panels[pid]["tree_sig"] = None
+        self.fill_queue(pid)
+        for j, b in enumerate(self.panels[pid]["batches"]):
+            if first in b:
+                tree.selection_set(f"b{j}")
+        self.signature = None
+
+    # -------------------------------------------------------------- dragging in a copier's queue
+
+    def press(self, pid, event):
+        tree = self.panels[pid]["tree"]
+        iid = tree.identify_row(event.y)
+        self.drag = {"pid": pid, "iid": iid, "y": event.y, "moved": False} if iid and iid != "none" else None
+
+    def dragged_number(self):
+        """The order being dragged: an order line, or a batch line that holds one order (else None)."""
+        d = self.drag
+        batches = self.panels[d["pid"]]["batches"]
+        if d["iid"].startswith("o"):
+            return int(d["iid"][1:])
+        batch = batches[int(d["iid"][1:])]
+        return batch[0] if len(batch) == 1 else None
+
+    def target(self, pid, y):
+        """("before", k): the batch lands before batch k (k = the count: at the end); ("join", k): an order joins
+        batch k, its own customer's."""
+        tree = self.panels[pid]["tree"]
+        batches = self.panels[pid]["batches"]
+        tops = tree.get_children("")
+        if not batches:
+            return ("before", 0)
+        row = tree.identify_row(y)
+        if not row:
+            last = tree.bbox(tops[-1]) if tops else None
+            return ("before", 0 if last and y < last[1] else len(batches))
+        top = tree.parent(row) or row
+        k = int(top[1:])
+        first = tree.bbox(top)
+        kids = tree.get_children(top)
+        end = tree.bbox(kids[-1]) if kids else first
+        if not first or not end:
+            return ("before", k)
+        y0, y1 = first[1], end[1] + end[3]
+        number = self.dragged_number()
+        if number is not None and number not in batches[k]:
+            same = self.run.orders[batches[k][0]]["customer"]["id"] == self.run.orders[number]["customer"]["id"]
+            if same and y0 + (y1 - y0) * 0.25 <= y <= y1 - (y1 - y0) * 0.25:
+                return ("join", k)
+        return ("before", k if y < (y0 + y1) / 2 else k + 1)
+
+    def motion(self, pid, event):
+        d = self.drag
+        if d is None or d["pid"] != pid:
+            return
+        if abs(event.y - d["y"]) > 4:
+            d["moved"] = True
+        if not d["moved"]:
+            return
+        tree, line = self.panels[pid]["tree"], self.panels[pid]["line"]
+        for iid in tree.get_children(""):
+            tree.item(iid, tags=())
+        kind, k = self.target(pid, event.y)
+        tops = tree.get_children("")
+        if kind == "join":
+            line.place_forget()
+            tree.item(tops[k], tags=("join",))
+            return
+        if k < len(tops):
+            box = tree.bbox(tops[k])
+            y = box[1] if box else 0
+        else:
+            last = tops[-1]
+            kids = tree.get_children(last)
+            box = tree.bbox(kids[-1] if kids else last)
+            y = box[1] + box[3] if box else 0
+        line.place(x=0, y=max(0, y - 1), relwidth=1.0)
+        line.lift()
+
+    def release(self, pid, event):
+        d = self.drag
+        where = self.target(pid, event.y) if d is not None and d["pid"] == pid and d["moved"] else None
+        self.drag = None
+        tree, line = self.panels[pid]["tree"], self.panels[pid]["line"]
+        line.place_forget()
+        for iid in tree.get_children(""):
+            tree.item(iid, tags=())
+        if where is not None:
+            self.drop_in_queue(pid, d["iid"], where)
+
+    def drop_in_queue(self, pid, iid, where):
+        """Apply a drag: iid the dragged line ("b<k>" a batch, "o<n>" one order), where from target()."""
+        kind, k = where
+        self.drag = {"pid": pid, "iid": iid}
+        number = self.dragged_number()
+        self.drag = None
+        first = None
+        if kind == "join":
+            self.run.move_order(pid, number, join=k)
+            first = number
+        elif iid.startswith("o"):
+            self.run.move_order(pid, number, before=k)
+            first = number
+        else:
+            batch = self.panels[pid]["batches"][int(iid[1:])]
+            first = batch[0]
+            self.run.move_batch(pid, int(iid[1:]), k)
+        self.panels[pid]["tree_sig"] = None
+        self.fill_queue(pid)
+        tree = self.panels[pid]["tree"]
+        if tree.exists(f"o{first}"):
+            tree.selection_set(f"o{first}")
+        else:
+            for j, b in enumerate(self.panels[pid]["batches"]):
+                if first in b:
+                    tree.selection_set(f"b{j}")
+        self.signature = None
+
+    # -------------------------------------------------------------- the order cards
 
     def fill(self, orders):
         shown = [o for o in orders if o["status"] in ("ready_to_print", "printed")]
-        self.status.config(text=self.status.cget("text") or "Nothing prints until you press Print.")
+        if not self.status.cget("text"):
+            self.status.config(text="Nothing prints until you press Start printing orders (or Print now).")
         if not shown:
             ttk.Label(self.scroll.inner, text="No order is ready to print.", style="Small.TLabel").grid(sticky="w")
             return
         r = 0
         for name, group in group_by_customer(shown):
-            head = ttk.Frame(self.scroll.inner)
-            head.grid(row=r, column=0, sticky="we", pady=(10, 4))
-            ttk.Label(head, text=name, style="Big.TLabel").pack(side="left")
-            ready = [o for o in group if o["status"] == "ready_to_print"]
-            if len(ready) > 1:
-                ttk.Button(head, text=f"Print all ({len(ready)})", style="Print.TButton",
-                           command=lambda g=ready: self.print_orders(g)).pack(side="left", padx=(16, 0))
+            ttk.Label(self.scroll.inner, text=name, style="Big.TLabel").grid(row=r, column=0, sticky="w", pady=(10, 4))
             r += 1
             for order in group:
+                where = self.run.order_state(order)
+                plan = self.run.plans.get(order["number"])
                 if order["status"] == "printed":
                     buttons = [("Ready for pickup", lambda o=order: self.ready_for_pickup(o), "Print.TButton"),
                                ("Open folder", lambda o=order: self.open_folder(o), None)]
                 else:
-                    state = self.sending.get(order["number"])
-                    buttons = ([] if state == "sending" else
-                               [("Print", lambda o=order: self.print_orders([o]), "Print.TButton")])
+                    printing = where and where.startswith("Printing")
+                    buttons = ([] if printing or not isinstance(plan, tuple) else
+                               [("Print now", lambda o=order: self.print_now(o), "Print.TButton")])
                     buttons.append(("Open folder", lambda o=order: self.open_folder(o), None))
                 box = self.card(self.scroll.inner, order, buttons)
                 box.grid(row=r, column=0, sticky="we", pady=(0, 8))
                 if order["status"] == "printed":
                     ttk.Label(box, text="Printed", style="Good.TLabel").grid(row=0, column=0, sticky="e")
-                elif order["number"] in self.sending:
-                    state = self.sending[order["number"]]
-                    ttk.Label(box, text="Sending…" if state == "sending" else state,
-                              style="Warn.TLabel" if state == "sending" else "Bad.TLabel").grid(row=0, column=0, sticky="e")
+                elif where:
+                    ttk.Label(box, text=where, style="Warn.TLabel").grid(row=0, column=0, sticky="e")
+                elif isinstance(plan, str):
+                    ttk.Label(box, text=f"Can't print yet: {plan}", style="Bad.TLabel").grid(row=0, column=0,
+                                                                                         sticky="e")
                 theme.on_surface(box)
                 r += 1
 
@@ -735,7 +960,9 @@ class PrintJobsScreen(OrderList):
             return (f"{f.name}: checking the file…", "Small.TLabel")
         if "error" in prepared:
             return (prepared["error"], "Bad.TLabel")
-        job = walkin_print.job_for(self.ctx.jobs, self.ctx.rules, item, prepared)
+        fixed = {int(i): p for p, part in (order.get("parts") or {}).items() for i in part["items"]}
+        job = walkin_print.job_for(self.ctx.jobs, self.ctx.rules, item, prepared,
+                                   printer=fixed.get(wo.item_index(order, item) - 1))
         if job is None:
             return ("these settings can't print: use Settings…", "Bad.TLabel")
         s = walkin_print.settings_for(self.ctx.rules, item, prepared)
@@ -745,12 +972,10 @@ class PrintJobsScreen(OrderList):
 
     def card(self, parent, order, buttons):
         box = super().card(parent, order, buttons)
-        r = 1
-        for i, item in enumerate(order["items"]):
-            if order["status"] == "ready_to_print":
+        if order["status"] == "ready_to_print" and not order.get("parts"):  # once sent, where items go is fixed
+            for i, r in enumerate(box.item_rows):
                 ttk.Button(box, text="Settings…", command=lambda o=order, k=i: SettingsDialog(self, o, k)).grid(
                     row=r, column=1, rowspan=2, sticky="e")
-            r += 2
         return box
 
 
@@ -859,8 +1084,12 @@ class OrdersScreen(OrderList):
                 for order in orders_of:
                     box = self.card(self.scroll.inner, order, self.buttons(order))
                     box.grid(row=r, column=0, sticky="we", pady=(0, 8))
+                    where = self.ctx.print_queue.order_state(order) if order["status"] == "ready_to_print" else None
                     if order["status"] == "printed":
                         ttk.Label(box, text="Printed", style="Good.TLabel").grid(row=0, column=0, sticky="e")
+                        theme.on_surface(box)
+                    elif where:
+                        ttk.Label(box, text=where, style="Warn.TLabel").grid(row=0, column=0, sticky="e")
                         theme.on_surface(box)
                     r += 1
         if text.strip():

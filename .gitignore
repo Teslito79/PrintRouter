@@ -42,3 +42,5 @@ walkin_customers.json
 .walkin_customers.json.tmp
 Walk-in/
 templates-backup/
+print_queue.json
+.print_queue.json.tmp

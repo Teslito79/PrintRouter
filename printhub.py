@@ -37,6 +37,7 @@ import pypdfium2 as pdfium
 
 import analyze
 import cleanup
+import copier_queue
 import jobs
 import orders
 import receipt
@@ -49,7 +50,7 @@ WORK_DIR = Path(tempfile.gettempdir()) / "ORCA" / "printhub"
 STEP_NAMES = {"PRINT": "Printing", "LAMINATE": "Laminating", "SPIRAL": "Spiral", "CUTTING": "Cutting",
               "STAPLE": "Stapling"}
 # Part states that keep a copier taken. 'turn': fronts of a hand-turned item are out, waiting for Print backs.
-BUSY = ("sending", "turn", "sent", "failed", "interrupted")
+BUSY = copier_queue.BUSY  # shared with walk-in Print Jobs
 PRODUCT_MAX_SHEETS = 9999  # products: more than 999 are sent as several jobs (jobs.MAX_COPIES each)
 SIDE_NAMES = {"single": "One side", "long": "Both sides, flip on long edge",
               "short": "Both sides, flip on short edge", orders.HAND: "Both sides, turned by hand"}
@@ -564,8 +565,7 @@ class PrintHubView:
     def start_printing(self):
         self.running = True
         self.refresh_run_label()
-        for pid in self.printers:
-            self.start_next(pid)
+        copier_queue.fill_free(self.printers, self.start_next)
         self.refresh()
 
     def stop_printing(self):
@@ -573,9 +573,7 @@ class PrintHubView:
         self.refresh_run_label()
 
     def refresh_run_label(self):
-        self.run_label.config(text="Printing orders: ON. “Pages collected” starts that copier's next order."
-                              if self.running else
-                              "Printing orders: OFF. Nothing is sent until you press Start printing orders.")
+        self.run_label.config(text=copier_queue.run_text(self.running, "order"))
 
     def start_laid_out(self):
         """Orders that got Layout done while printing is ON start by themselves once they are in
@@ -606,10 +604,8 @@ class PrintHubView:
         part_jobs = [self.document_job(order, docs[name], printer)[1] for name in self.parts_of(order)[printer]
                      if name in docs]
         sheets = sum(job["sheets"] for job in part_jobs if job)
-        limit = self.rules.get("confirm_above_sheets", 0)
-        if limit and sheets > limit and not messagebox.askyesno(
-                "PrintHub", f"Order {order.number} uses {sheets} sheets on {self.printers[printer]['label']}.\n\n"
-                            f"Print it?", parent=self.win):
+        if not copier_queue.big_send_ok(self.rules, self.win, "PrintHub", f"Order {order.number}", sheets,
+                                        self.printers[printer]["label"]):
             return
         self.send_part(order, printer)
 
@@ -621,7 +617,7 @@ class PrintHubView:
                            for pid, names in self.parts_of(order).items()}
         part = st["parts"][printer]
         docs = {d.name: d for d in order.documents}
-        tasks, hand = [], None
+        found = {}
         for name in part["documents"]:
             if name in part["sent"]:
                 continue
@@ -630,18 +626,20 @@ class PrintHubView:
                 part.update(state="failed", error=f"{name}: can't be printed any more")
                 self.save(order.number, f"{name} can't be printed on {printer}")
                 return
-            if job.get("hand"):
-                # Fronts after the other documents, one hand-turned item at a time; its backs wait
-                # for Print backs (and are never part of this).
-                if hand is None and name not in part.get("fronts", []):
-                    hand = (name, job)
-                continue
+            found[name] = job
+        # Fronts after the other documents, one hand-turned item at a time; its backs wait
+        # for Print backs (and are never part of this). copier_queue.next_send, shared with walk-in.
+        straight, hand_name = copier_queue.next_send(part["documents"], lambda n: bool(found[n].get("hand")),
+                                                     part["sent"], part.get("fronts", []))
+        tasks = []
+        for name in straight:
+            job = found[name]
             # The order number in the name shows in the copier's queue and in print_log.csv.
             job["file_name"] = f"{order.number} {name} {docs[name].title}"
             job["log_info"] = self.log_info(order, docs[name])
             tasks.append((name, job, docs[name].pdf, WORK_DIR / order.number / name, None))
-        if hand:
-            name, job = hand
+        if hand_name:
+            name, job = hand_name, found[hand_name]
             job["file_name"] = f"{order.number} {name} {docs[name].title} fronts"
             tasks.append((name, job, docs[name].pdf, WORK_DIR / order.number / name, "fronts"))
         if not tasks:  # only backs are left: they wait for Print backs
@@ -683,10 +681,10 @@ class PrintHubView:
         order = next((o for o in self.orders if o.number == number), None)
         part = self.status[number]["parts"][printer]
         part.pop("batch", None)
-        waiting = [n for n in part["documents"] if n in part.get("fronts", []) and n not in part["sent"]]
+        waiting = copier_queue.waiting_backs(part["documents"], part["sent"], part.get("fronts", []))
         if waiting:
-            part.update(state="turn", turn=waiting[0])
-            self.save(number, f"{waiting[0]} fronts out on {printer}: turn the stack over, then Print backs")
+            part.update(state="turn", turn=waiting)
+            self.save(number, f"{waiting} fronts out on {printer}: turn the stack over, then Print backs")
         elif order is not None and any(n not in part["sent"] for n in part["documents"]):
             self.send_part(order, printer)  # another hand-turned item's fronts
         else:

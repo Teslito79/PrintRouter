@@ -2,7 +2,7 @@
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X) comes back here;
 closing the menu closes ORCA. The menu starts what runs whatever shows: the ttk style, the website sync, the
-finished-order cleanup, the toner reader and the walk-in file checks and sending. PrintHub is made the first time
+finished-order cleanup, the toner reader, the walk-in file checks and the walk-in print queue (walkin_queue.py). PrintHub is made the first time
 it is opened and is then only hidden (its orders and a waiting "Print backs" stay). Walk-in, Orders, Counter,
 Prices and Data are made fresh each time (walk-in orders live in their folders, not in the window).
 """
@@ -21,6 +21,7 @@ import theme
 import toners
 import walkin_orders
 import walkin_print
+import walkin_queue
 import walkin_screens
 
 FONT = ("Segoe UI", 12)
@@ -55,9 +56,10 @@ class MainMenu:
         # Copier counters and toner levels, read at start and every 10 minutes (toners.py).
         self.toners = toners.TonerWatch(self.rules)
         self.toners.start()
-        # Walk-in orders: their files are checked and their prints sent in the background.
+        # Walk-in orders: their files are checked in the background; the print queue (one customer at a time per
+        # copier, Start / Stop printing orders, Pages collected) lives here, so it carries on behind other screens.
         self.preparer = walkin_print.Preparer()
-        self.sender = walkin_print.Sender(self.jobs)
+        self.print_queue = walkin_queue.Run(self.jobs, self.rules, self.preparer)
         # Open walk-in orders whose product folders lack W100-2.cdr or Options.txt get them (never overwritten).
         threading.Thread(target=walkin_orders.prepare_all, args=(self.rules,), daemon=True).start()
         self.printhub = None
@@ -86,7 +88,9 @@ class MainMenu:
         self.sync_label = ttk.Label(f, text="", style="Hint.TLabel", justify="center", wraplength=380)
         self.sync_label.grid(row=8, column=0, pady=(22, 0))
         theme.dark_title_bar(win)
+        self.print_queue.parent = win
         self.show_sync()
+        self.queue_tick()
 
     # -------------------------------------------------------------- showing
 
@@ -146,11 +150,18 @@ class MainMenu:
             self.toner_dot.place_forget()
         self.win.after(2000, self.show_sync)
 
+    def queue_tick(self):
+        try:
+            self.print_queue.tick()
+        except Exception:
+            pass  # never stop the menu; the next tick tries again
+        self.win.after(2000, self.queue_tick)
+
     # -------------------------------------------------------------- closing
 
     def quit(self):
         """Closing the menu closes ORCA (asks first while something is being sent)."""
-        if self.sender.busy() and not messagebox.askyesno(
+        if self.print_queue.busy() and not messagebox.askyesno(
                 parent=self.win, title="ORCA", message="Walk-in orders are still being sent. Close anyway?"):
             return
         if (self.printhub is not None and self.printhub.sending() and not messagebox.askyesno(
