@@ -181,8 +181,8 @@ def cover_pdf(order, path, when=None):
     else:
         lines[0] = lines[0][:3] + (lines[0][3] + 10,)
     due = walkin_orders.price_due(order)
-    lines.append((f"Total: EUR {due:,.2f}" + ("  (changed price)" if order.get("changed_total") is not None else ""),
-                  18, True, 8))
+    typed = order.get("changed_total") is not None and not order.get("rounding")  # test orders from before 17_07
+    lines.append((f"Total: EUR {due:,.2f}" + ("  (changed price)" if typed else ""), 18, True, 8))  # rounded: the amount only
     lines.append((f"Printed {when.day} {when:%b %Y, %H:%M}   ·   placed {order['created'][:10]}", 11, False, 16))
     lines.append(("Items", 13, True, 6))
     for i, item in enumerate(order["items"], start=1):

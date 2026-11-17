@@ -44,3 +44,5 @@ Walk-in/
 templates-backup/
 print_queue.json
 .print_queue.json.tmp
+sales_log.csv
+.sales_log.csv.tmp

@@ -33,3 +33,11 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    listed there and Pages shows its page count. Add item, Place order: the file is in the item's folder.
 8. One ORCA: double-click ORCA twice; only one opens (the second click brings it to the front).
    Minimise it and double-click again: it comes back.
+9. Customers and loyalty (needs prices in Walk-in_Prices.xlsx first): Walk-in > Customers, note a
+   customer's "12 months" amount. Place a small order for them (Get Quote, their phone: no question),
+   print it, Ready for pickup, Collected. Customers again: their 12 months and all time went up by the
+   amount paid, and the order is listed under them.
+10. Don't keep: Get Quote with a phone ORCA doesn't know: Place order asks "First order from this
+   customer...". Press Don't keep. The cover sheet shows name and phone. Collected: the order's folder
+   is gone from Walk-in\Open, it is not in Customers (nor in the Recycle Bin), and
+   Walk-in\sales_log.csv has its line with no name.

@@ -2,7 +2,11 @@
 
 Folders, next to ADMIN (C:\\PrintRouter\\Walk-in on the work PC):
 - Walk-in\\Open\\#123\\  one per open order, with order.json and one subfolder per item ("1 Business cards 85 x 55");
-- Walk-in\\Customers\\<customer folder>\\<YYYY-MM-DD> #123[ cancelled]\\  collected and cancelled orders, never deleted.
+- Walk-in\\Customers\\<customer folder>\\<YYYY-MM-DD> #123[ cancelled]\\  collected and cancelled orders, never deleted
+  (except by Forget customer…);
+- Walk-in\\sales_log.csv  one line per collected or cancelled order, with no name (2026-11-17_07).
+A first-time customer who says Don't keep (keep_data false) gets no record, and their order folder is deleted for
+good at Collected or Cancelled: only the sales line stays.
 Numbers #100 to #299: the lowest one no folder in Open uses. Customers are matched by phone or email, never by name,
 and kept in walkin_customers.json in ADMIN (local, gitignored: customer details never go to GitHub).
 Every file is written safely (temp file, then rename).
@@ -80,7 +84,10 @@ def norm_email(text):
 
 
 class Customers:
-    """walkin_customers.json: {"customers": {id: {id, name, phones, emails, loyalty, folder, created}}}."""
+    """walkin_customers.json: {"customers": {id: {id, name, phones, emails, loyalty, loyalty_mode, consent, folder,
+    created}}}. loyalty_mode "auto" (the level follows the spending, walkin_prices spend rows) or "manual" (loyalty
+    is the level staff picked). consent: the date the customer agreed to have their details kept (2026-11-17_07);
+    customers who said Don't keep are never in this file."""
 
     def __init__(self):
         self.path = routing.app_dir() / CUSTOMERS_FILE
@@ -89,6 +96,17 @@ class Customers:
             self.data.setdefault("customers", {})
         except (OSError, ValueError):
             self.data = {"customers": {}}
+        changed = False
+        for c in self.all.values():  # customers from before 2026-11-17_07 count as Keep details, automatic loyalty
+            if "consent" not in c:
+                c["consent"], changed = "before 2026-11-17", True
+            if c.get("loyalty_mode") not in ("auto", "manual"):
+                c["loyalty_mode"], changed = "auto", True
+        if changed:
+            try:
+                self.save()
+            except OSError:
+                pass
 
     @property
     def all(self):
@@ -129,9 +147,15 @@ class Customers:
             folder, n = f"{base} ({n})", n + 1
         return folder
 
+    def known(self, phone, email):
+        """True when the phone or the email belongs to a customer (no first-time question then)."""
+        return bool(self.by_phone(phone) or self.by_email(email))
+
     def resolve(self, name, phone, email, loyalty, join=None):
-        """The customer for an order (made or updated). join: answer to "Same customer?" when the phone and the
-        email belong to two customers (True: join them; False: the phone's customer, nothing linked)."""
+        """The customer for an order (made or updated). loyalty: "auto" (automatic) or a level 0-3 picked by hand
+        (manual from now on). join: answer to "Same customer?" when the phone and the email belong to two customers
+        (True: join them; False: the phone's customer, nothing linked). A new customer said Keep details: consent
+        is today's date."""
         phone, email = norm_phone(phone), norm_email(email)
         clash = self.conflict(phone, email)
         if clash and join is None:
@@ -145,12 +169,16 @@ class Customers:
             keep = self.lookup(phone, email)
         if keep is None:
             cid = uuid.uuid4().hex[:10]
-            keep = {"id": cid, "name": clean_name(name), "phones": [], "emails": [], "loyalty": loyalty,
-                    "folder": self._folder(name, phone, email), "created": now()}
+            keep = {"id": cid, "name": clean_name(name), "phones": [], "emails": [], "loyalty": 0,
+                    "loyalty_mode": "auto", "consent": now()[:10], "folder": self._folder(name, phone, email),
+                    "created": now()}
             self.all[cid] = keep
         if name:
             keep["name"] = " ".join(str(name).split())
-        keep["loyalty"] = loyalty
+        if loyalty == "auto":
+            keep["loyalty_mode"] = "auto"
+        else:
+            keep["loyalty_mode"], keep["loyalty"] = "manual", int(loyalty or 0)
         if phone and phone not in keep["phones"] and (link or not self.by_phone(phone)):
             keep["phones"].append(phone)
         if email and email not in keep["emails"] and link:
@@ -186,7 +214,59 @@ class Customers:
                 save_order(order)
         del self.all[gone["id"]]
         self.save()
+        clear_cache()
         return keep
+
+    # -------------------------------------------------------------- the Customers list (2026-11-17_07)
+
+    def set_loyalty(self, cid, choice):
+        """Loyalty…: "auto" (Automatic) or a level 0-3 set by hand."""
+        c = self.all[cid]
+        if choice == "auto":
+            c["loyalty_mode"] = "auto"
+        else:
+            c["loyalty_mode"], c["loyalty"] = "manual", int(choice)
+        self.save()
+
+    def edit(self, cid, name=None, phone="", email=""):
+        """Edit details…: a new name, and a phone or email added. Matching stays by phone and email only, so a
+        phone or email of another customer is refused. The folder name stays as it was."""
+        c = self.all[cid]
+        phone, email = norm_phone(phone), norm_email(email)
+        if phone:
+            other = self.by_phone(phone)
+            if other and other["id"] != cid:
+                raise ValueError(f"{phone} is already {other['name'] or other['folder']}'s phone.")
+        if email:
+            if "@" not in email:
+                raise ValueError(f"“{email}” isn't an email address.")
+            other = self.by_email(email)
+            if other and other["id"] != cid:
+                raise ValueError(f"{email} is already {other['name'] or other['folder']}'s email.")
+        if name is not None and " ".join(str(name).split()):
+            c["name"] = " ".join(str(name).split())
+        if phone and phone not in c["phones"]:
+            c["phones"].append(phone)
+        if email and email not in c["emails"]:
+            c["emails"].append(email)
+        self.save()
+        return c
+
+    def forget(self, cid):
+        """Forget customer…: their Customers folder is deleted for good (not to the Recycle Bin) and their record
+        goes. Their lines in sales_log.csv stay (they never had a name). Refused while they have open orders."""
+        with LOCK:
+            c = self.all[cid]
+            open_numbers = [o["number"] for o in list_open() if o["customer"]["id"] == cid]
+            if open_numbers:
+                raise ValueError(f"{c['name'] or c['folder']} still has open orders "
+                                 f"{', '.join(f'#{n}' for n in sorted(open_numbers))}.")
+            folder = customers_dir() / c["folder"]
+            if folder.exists():
+                delete_for_good(folder)
+            del self.all[cid]
+            self.save()
+            clear_cache()
 
 
 def _repoint(path, customer):
@@ -270,8 +350,10 @@ def list_history():
     return out
 
 
-def place(items, priced, customer, source, loyalty_line, changed_total=None):
+def place(items, priced, customer, source, loyalty_line, keep_data=True):
     """Make the order: the lowest free number, its folder with one subfolder per item, order.json.
+    The total due is priced["due"] (the staff's rounding, priced["rounding"]): kept as changed_total.
+    keep_data False (Don't keep): customer is only what was typed, with an id of its own and no record.
     Returns the order, or raises ValueError with the message for staff."""
     import walkin_pricing
     with LOCK:
@@ -292,7 +374,8 @@ def place(items, priced, customer, source, loyalty_line, changed_total=None):
                  "loyalty": {"level": (loyalty_line or {}).get("level", 0), "pct": (loyalty_line or {}).get("pct"),
                              "amount": (loyalty_line or {}).get("amount", 0.0)},
                  "items": out_items, "volume": priced["volume"], "total": priced["total"],
-                 "changed_total": changed_total, "status": "waiting",
+                 "changed_total": priced["due"] if priced.get("rounding") else None,
+                 "rounding": priced.get("rounding"), "keep_data": bool(keep_data), "status": "waiting",
                  "times": {"placed": now(), "printed": None, "ready": None, "collected": None, "cancelled": None},
                  "paid": None, "_folder": folder}
         save_order(order)
@@ -495,28 +578,201 @@ def set_status(order, status):
     save_order(order)
 
 
-def change_price(order, value):
-    order["changed_total"] = None if value is None else round(float(value), 2)
-    save_order(order)
+def rounded_text(order):
+    """" (rounded)" / " (changed price)" (a typed price, test orders from before 2026-11-17_07) / ""."""
+    if order.get("changed_total") is None or abs(order["changed_total"] - order["total"]) < 0.005:
+        return ""
+    return " (rounded)" if order.get("rounding") else " (changed price)"
+
+
+def delete_for_good(path):
+    """Delete a folder permanently (not to the Recycle Bin): Don't keep orders and forgotten customers."""
+    import stat
+
+    def again(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    shutil.rmtree(path, onexc=again)
 
 
 def finish(order, cancelled=False):
-    """Collected (or cancelled): note it, then move the folder into the customer's folder; the number is free."""
+    """Collected (or cancelled): note it and write the sales line; then the folder moves into the customer's folder,
+    or, for a customer who said Don't keep, is deleted for good. The number is free. Returns the new folder or None."""
     with LOCK:
-        customers = Customers()
-        c = customers.all.get(order["customer"]["id"])
-        folder_name = c["folder"] if c else clean_name(order["customer"].get("name") or "Customer")
-        day = order["created"][:10]
-        dest = _free_path(customers_dir() / folder_name / f"{day} #{order['number']}{' cancelled' if cancelled else ''}")
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        keep = order.get("keep_data", True) is not False
         if cancelled:
             set_status(order, "cancelled")
         else:
             order["paid"] = price_due(order)
             set_status(order, "collected")
-        shutil.move(str(order["_folder"]), str(dest))
-        order["_folder"] = dest
+        if keep:
+            customers = Customers()
+            c = customers.all.get(order["customer"]["id"])
+            folder_name = c["folder"] if c else clean_name(order["customer"].get("name") or "Customer")
+            day = order["created"][:10]
+            dest = _free_path(customers_dir() / folder_name /
+                              f"{day} #{order['number']}{' cancelled' if cancelled else ''}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(order["_folder"]), str(dest))
+            order["_folder"] = dest
+        else:
+            delete_for_good(order["_folder"])
+            dest = None
+        write_sale(order)
+        clear_cache()
+        if keep and not cancelled:
+            update_level(order["customer"]["id"])
         return dest
+
+
+# ------------------------------------------------------------------ sales log and spending (2026-11-17_07)
+
+SALES_FILE = "sales_log.csv"
+SALES_HEAD = ["date", "order", "status", "items", "paid"]
+
+
+def sales_path():
+    return base_dir() / SALES_FILE
+
+
+def items_short(order):
+    """'100 x Business cards; Document A4 12 pages x 2' (no name, phone or email)."""
+    out = []
+    for item in order["items"]:
+        if item["kind"] == "document":
+            pages = f"{item['pages']} page{'' if item['pages'] == 1 else 's'}"
+            out.append(f"Document {item['size']} {pages} x {item['copies']}")
+        else:
+            import walkin_pricing
+            p = walkin_pricing.product_of(item)
+            out.append(f"{item['qty']} x {p['name'] if p else item.get('product')}")
+    return "; ".join(out)
+
+
+def write_sale(order):
+    """One line in Walk-in\\sales_log.csv for every collected or cancelled walk-in order, with no name: the date,
+    the number, collected / cancelled, the items in short and the amount paid. Written safely (temp file, rename)."""
+    import csv
+    import io
+    path = sales_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        old = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        old = ""
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\r\n")
+    if not old.strip():
+        w.writerow(SALES_HEAD)
+    cancelled = order["status"] == "cancelled"
+    day = (order["times"].get("cancelled" if cancelled else "collected") or now())[:10]
+    w.writerow([day, f"#{order['number']}", "cancelled" if cancelled else "collected", items_short(order),
+                f"{0 if cancelled else price_due(order):.2f}"])
+    if old and not old.endswith("\n"):
+        old += "\r\n"
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(old + buf.getvalue(), encoding="utf-8-sig")
+    os.replace(tmp, path)
+
+
+def read_sales():
+    import csv
+    try:
+        with open(sales_path(), encoding="utf-8-sig", newline="") as f:
+            return list(csv.DictReader(f))
+    except OSError:
+        return []
+
+
+_cache = {"history": None}
+
+
+def clear_cache():
+    _cache["history"] = None
+
+
+def history():
+    """Collected and cancelled orders (read once per session, again after Collected / cancel / join / forget)."""
+    with LOCK:
+        if _cache["history"] is None:
+            _cache["history"] = list_history()
+        return _cache["history"]
+
+
+def collected_on(order):
+    """The date an order was collected: stored at Collected; for older orders the date its folder was moved, or
+    the date it was placed."""
+    when = (order.get("times") or {}).get("collected")
+    if when:
+        return datetime.date.fromisoformat(when[:10])
+    try:
+        return datetime.date.fromtimestamp(order["_folder"].stat().st_mtime)
+    except (OSError, KeyError):
+        return datetime.date.fromisoformat(order["created"][:10])
+
+
+def spending(cid, today=None):
+    """{spent_12, all_time, orders, last_visit, history}: what the customer paid for collected orders (the amount
+    due: changed_total if set, else total), in the last 365 days and all time. Cancelled and open orders don't
+    count. Read from every order folder whose order.json carries the customer's id."""
+    today = today or datetime.date.today()
+    mine = [o for o in history() if o["customer"].get("id") == cid]
+    spent = total = 0.0
+    count = 0
+    last = None
+    for o in mine:
+        placed = o["created"][:10]
+        last = max(last or placed, placed)
+        if o["status"] != "collected":
+            continue
+        count += 1
+        due = price_due(o)
+        total += due
+        if (today - collected_on(o)).days <= 365:
+            spent += due
+    for o in list_open():
+        if o["customer"].get("id") == cid:
+            last = max(last or o["created"][:10], o["created"][:10])
+    return {"spent_12": round(spent, 2), "all_time": round(total, 2), "orders": count, "last_visit": last,
+            "history": mine}
+
+
+def spent_12_months(cid, today=None):
+    return spending(cid, today)["spent_12"]
+
+
+def level_of(customer, pl=None, today=None):
+    """(level 0-3, "auto" / "manual", spent in 12 months) for a customer record."""
+    import walkin_prices
+    pl = pl or walkin_prices.current()
+    spent = spent_12_months(customer["id"], today)
+    if customer.get("loyalty_mode") == "manual":
+        return int(customer.get("loyalty") or 0), "manual", spent
+    return pl.level_for(spent), "auto", spent
+
+
+def update_level(cid):
+    """At Collected: an automatic customer's level is worked out again (and stored, for the record)."""
+    customers = Customers()
+    c = customers.all.get(cid)
+    if c and c.get("loyalty_mode", "auto") == "auto":
+        level = level_of(c)[0]
+        if c.get("loyalty") != level:
+            c["loyalty"] = level
+            customers.save()
+
+
+def customer_matches(c, text):
+    """The Customers list search, by the same rules as the order search: phone (any way written, 4+ digits),
+    name or email."""
+    t = text.strip().lower()
+    if not t:
+        return True
+    phone = norm_phone(text)
+    if phone and len(re.sub(r"\D", "", text)) >= 4:
+        if any(phone in p or p.endswith(phone.lstrip("+")) for p in c.get("phones", [])):
+            return True
+    return t in (c.get("name") or "").lower() or any(t in e for e in c.get("emails", []))
 
 
 # ------------------------------------------------------------------ files dropped onto an item (2026-11-17)

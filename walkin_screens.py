@@ -10,6 +10,7 @@ import math
 import os
 import threading
 import tkinter as tk
+import uuid
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -35,14 +36,40 @@ def euro(x):
     return f"EUR {x:,.2f}"
 
 
-def parse_money(text):
-    t = str(text).strip().replace("EUR", "").replace("€", "").replace(",", ".").strip()
-    if not t:
-        return None
-    value = float(t)
-    if value < 0:
-        raise ValueError(t)
-    return round(value, 2)
+KEEP_QUESTION = "First order from this customer. Keep their details for loyalty and their own folder?"
+
+
+def ask_keep(parent):
+    """The first-time question: True (Keep details), False (Don't keep) or None (closed with X / Esc: cancel)."""
+    dlg = tk.Toplevel(parent)
+    dlg.title("ORCA - new customer")
+    dlg.transient(parent)
+    f = ttk.Frame(dlg, padding=22)
+    f.grid()
+    ttk.Label(f, text=KEEP_QUESTION, wraplength=440, justify="left", font=("Segoe UI", 12)).grid(
+        row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(f, text="Don't keep: the order is placed and printed as usual, with name and phone on the cover sheet; "
+                      "nothing about them is saved, and the order's folder is deleted for good once it is collected "
+                      "or cancelled.", style="Small.TLabel", wraplength=440, justify="left").grid(
+        row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+    choice = {"keep": None}
+
+    def pick(value):
+        choice["keep"] = value
+        dlg.destroy()
+
+    b = ttk.Frame(f)
+    b.grid(row=2, column=0, columnspan=2, sticky="e", pady=(16, 0))
+    dlg.keep_btn = ttk.Button(b, text="Keep details", style="Print.TButton", command=lambda: pick(True))
+    dlg.keep_btn.pack(side="left")
+    dlg.dont_btn = ttk.Button(b, text="Don't keep", command=lambda: pick(False))
+    dlg.dont_btn.pack(side="left", padx=(8, 0))
+    dlg.bind("<Escape>", lambda _e: dlg.destroy())
+    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)
+    theme.dark_title_bar(dlg)
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return choice["keep"]
 
 
 def customer_text(c):
@@ -229,16 +256,18 @@ class WalkinScreen(Screen):
     """Three big buttons: Get Quote, Add Email, Print Jobs."""
 
     def __init__(self, ctx, on_back):
-        super().__init__(ctx, "Walk-in", on_back, size="900x560")
+        super().__init__(ctx, "Walk-in", on_back, size="1160x560")
         self.warn = self.warnings(self.frame, 1)
         box = ttk.Frame(self.frame)
         box.grid(row=2, column=0, pady=(40, 0))
         for c, (text, command) in enumerate((("Get Quote", lambda: self.open_quote("quote")),
                                              ("Add Email", lambda: self.open_quote("email")),
-                                             ("Print Jobs", self.open_print_jobs))):
+                                             ("Print Jobs", self.open_print_jobs),
+                                             ("Customers", self.open_customers))):
             ttk.Button(box, text=text, style="Walkin.TButton", width=11, command=command).grid(row=0, column=c, padx=12)
         ttk.Label(self.frame, text="Get Quote: a customer at the counter (name and phone needed).   "
-                                   "Add Email: an order that came by email.   Print Jobs: orders ready to print.",
+                                   "Add Email: an order that came by email.   Print Jobs: orders ready to print.   "
+                                   "Customers: spending and loyalty.",
                   style="Small.TLabel").grid(row=3, column=0, pady=(30, 0))
         self.ready()
         self.poll()
@@ -257,6 +286,254 @@ class WalkinScreen(Screen):
     def open_print_jobs(self):
         self.win.withdraw()
         PrintJobsScreen(self.ctx, on_back=self.show)
+
+    def open_customers(self):
+        self.win.withdraw()
+        CustomersScreen(self.ctx, on_back=self.show)
+
+
+# ------------------------------------------------------------------ Customers (2026-11-17_07)
+
+class CustomersScreen(Screen):
+    """Every kept customer with orders, last visit, spending (12 months, all time) and loyalty; search and sort;
+    the selected customer's orders below. Open folder, Loyalty…, Edit details…, Forget customer…. Nothing else here
+    deletes anything or changes prices or orders."""
+
+    COLUMNS = (("name", "Name", 170), ("phones", "Phone(s)", 150), ("emails", "Email(s)", 190),
+               ("orders", "Orders", 60), ("last", "Last visit", 95), ("spent", "12 months (EUR)", 135),
+               ("all", "All time (EUR)", 125), ("loyalty", "Loyalty", 130))
+
+    def __init__(self, ctx, on_back):
+        super().__init__(ctx, "Customers", on_back, size="1240x860")
+        f = self.frame
+        f.rowconfigure(2, weight=3)
+        f.rowconfigure(5, weight=2)
+        ttk.Label(self.top, text="Search:").pack(side="left", padx=(40, 6))
+        self.search = tk.StringVar()
+        ttk.Entry(self.top, textvariable=self.search, width=28, font=FONT).pack(side="left")
+        self.search.trace_add("write", lambda *_: self.fill())
+        ttk.Label(self.top, text="phone, name or email", style="Small.TLabel").pack(side="left", padx=8)
+        self.sort_by, self.descending = "spent", True
+        self.tree = ttk.Treeview(f, columns=[c[0] for c in self.COLUMNS], show="headings", selectmode="browse")
+        for key, text, width in self.COLUMNS:
+            self.tree.heading(key, text=text, anchor="w", command=lambda k=key: self.sort(k))
+            self.tree.column(key, width=width, anchor="e" if key in ("orders", "spent", "all") else "w",
+                             stretch=key in ("name", "emails"))
+        self.tree.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
+        self.tree.bind("<<TreeviewSelect>>", lambda _: self.show_orders())
+        buttons = ttk.Frame(f)
+        buttons.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        for text, command in (("Open folder", self.open_folder), ("Loyalty…", self.loyalty),
+                              ("Edit details…", self.edit), ("Forget customer…", self.forget)):
+            ttk.Button(buttons, text=text, command=command).pack(side="left", padx=(0, 8))
+        self.totals = ttk.Label(buttons, text="", style="Head.TLabel")
+        self.totals.pack(side="left", padx=(24, 0))
+        self.orders_title = ttk.Label(f, text="Select a customer to see their orders.", style="Head.TLabel")
+        self.orders_title.grid(row=4, column=0, sticky="w", pady=(14, 4))
+        self.orders = ttk.Treeview(f, columns=("date", "n", "items", "amount", "status"), show="headings", height=7)
+        for key, text, width, stretch in (("date", "Date", 100, False), ("n", "#", 60, False),
+                                          ("items", "Items", 640, True), ("amount", "Amount", 110, False),
+                                          ("status", "Status", 110, False)):
+            self.orders.heading(key, text=text, anchor="w")
+            self.orders.column(key, width=width, stretch=stretch, anchor="e" if key == "amount" else "w")
+        self.orders.grid(row=5, column=0, sticky="nsew")
+        self.rows = {}
+        self.refresh()
+        self.ready()
+
+    # -------------------------------------------------------------- data
+
+    def refresh(self):
+        """Read the customers and their spending again (after a change here)."""
+        pl = walkin_prices.current()
+        self.customers = wo.Customers()
+        self.rows = {}
+        for cid, c in self.customers.all.items():
+            s = wo.spending(cid)
+            if c.get("loyalty_mode") == "manual":
+                level, how = int(c.get("loyalty") or 0), "set by hand"
+            else:
+                level, how = pl.level_for(s["spent_12"]), "auto"
+            self.rows[cid] = {"c": c, "s": s, "name": c.get("name") or c["folder"],
+                              "phones": ", ".join(c.get("phones", [])), "emails": ", ".join(c.get("emails", [])),
+                              "orders": s["orders"], "last": s["last_visit"] or "", "spent": s["spent_12"],
+                              "all": s["all_time"], "loyalty": f"{level or 'None'} ({how})"}
+        self.fill()
+
+    def sort(self, key):
+        if self.sort_by == key:
+            self.descending = not self.descending
+        else:
+            self.sort_by, self.descending = key, key in ("spent", "all", "orders", "last")
+        self.fill()
+
+    def fill(self):
+        keep = self.selected_id()
+        self.tree.delete(*self.tree.get_children())
+        text = self.search.get()
+        shown = [r for r in self.rows.values() if wo.customer_matches(r["c"], text)]
+        key = self.sort_by
+        shown.sort(key=lambda r: (r[key].lower() if isinstance(r[key], str) else r[key]), reverse=self.descending)
+        for r in shown:
+            self.tree.insert("", "end", iid=r["c"]["id"], values=(
+                r["name"], r["phones"], r["emails"], r["orders"], r["last"], f"{r['spent']:,.2f}",
+                f"{r['all']:,.2f}", r["loyalty"]))
+        for k, text_, _ in self.COLUMNS:
+            arrow = (" ▼" if self.descending else " ▲") if k == key else ""
+            self.tree.heading(k, text=text_ + arrow)
+        self.totals.config(text=f"{len(self.rows)} customers   ·   spent in the last 12 months: "
+                                f"{euro(sum(r['spent'] for r in self.rows.values()))}")
+        if keep and self.tree.exists(keep):
+            self.tree.selection_set(keep)
+        self.show_orders()
+
+    def selected_id(self):
+        sel = self.tree.selection()
+        return sel[0] if sel else None
+
+    def show_orders(self):
+        self.orders.delete(*self.orders.get_children())
+        cid = self.selected_id()
+        if not cid or cid not in self.rows:
+            self.orders_title.config(text="Select a customer to see their orders.")
+            return
+        r = self.rows[cid]
+        self.orders_title.config(text=f"{r['name']}: orders")
+        lines = []
+        for o in wo.list_open():
+            if o["customer"].get("id") == cid:
+                lines.append((o["created"][:10], o["number"], wo.items_short(o), euro(wo.price_due(o)), "open"))
+        for o in r["s"]["history"]:
+            if o["status"] == "cancelled":
+                lines.append(((o["times"].get("cancelled") or o["created"])[:10], o["number"], wo.items_short(o),
+                              "-", "cancelled"))
+            else:
+                lines.append((wo.collected_on(o).isoformat(), o["number"], wo.items_short(o), euro(wo.price_due(o)),
+                              "collected"))
+        lines = [x for x in lines if x[4] == "open"] + sorted((x for x in lines if x[4] != "open"),
+                                                              key=lambda x: x[0], reverse=True)
+        for k, (day, number, items, amount, status) in enumerate(lines):
+            self.orders.insert("", "end", iid=str(k), values=(day, f"#{number}", items, amount, status))
+
+    # -------------------------------------------------------------- buttons
+
+    def need(self):
+        cid = self.selected_id()
+        if not cid:
+            messagebox.showinfo(parent=self.win, title="ORCA", message="Select a customer first.")
+        return cid
+
+    def open_folder(self):
+        cid = self.need()
+        if not cid:
+            return
+        folder = wo.customers_dir() / self.rows[cid]["c"]["folder"]
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(folder)
+        except OSError as e:
+            messagebox.showwarning(parent=self.win, title="ORCA", message=f"Could not open the folder.\n\n{e}")
+
+    def loyalty(self):
+        cid = self.need()
+        if cid:
+            LoyaltyDialog(self, self.rows[cid]["c"])
+
+    def edit(self):
+        cid = self.need()
+        if cid:
+            DetailsDialog(self, self.rows[cid]["c"])
+
+    def forget(self):
+        cid = self.need()
+        if not cid:
+            return
+        name = self.rows[cid]["name"]
+        if not messagebox.askyesno(parent=self.win, title="ORCA",
+                                   message=f"Delete {name}'s details and folder for good? Their sales stay without "
+                                           f"a name."):
+            return
+        try:
+            wo.Customers().forget(cid)
+        except ValueError as e:
+            messagebox.showwarning(parent=self.win, title="ORCA", message=str(e))
+            return
+        except OSError as e:
+            messagebox.showwarning(parent=self.win, title="ORCA",
+                                   message=f"Could not delete the folder (is a file in it open?).\n\n{e}")
+        self.refresh()
+
+
+class LoyaltyDialog:
+    """Loyalty…: Automatic, None, 1, 2 or 3 for one customer."""
+
+    def __init__(self, screen, customer):
+        self.screen, self.customer = screen, customer
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("ORCA - loyalty")
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=18)
+        f.grid()
+        ttk.Label(f, text=f"Loyalty for {customer.get('name') or customer['folder']}:").grid(row=0, column=0, sticky="w")
+        value = ("Automatic" if customer.get("loyalty_mode", "auto") == "auto" else
+                 (str(customer.get("loyalty")) if customer.get("loyalty") else "None"))
+        self.var = tk.StringVar(value=value)
+        ttk.Combobox(f, textvariable=self.var, values=["Automatic", "None", "1", "2", "3"], state="readonly",
+                     width=12, font=FONT).grid(row=0, column=1, sticky="w", padx=8)
+        ttk.Label(f, text="Automatic: the level follows what they spent in the last 12 months. Any other choice "
+                          "stays until set back to Automatic.", style="Small.TLabel", wraplength=380,
+                  justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        b = ttk.Frame(f)
+        b.grid(row=2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(b, text="Save", style="Print.TButton", command=self.save).pack(side="left")
+        ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        theme.dark_title_bar(dlg)
+        dlg.grab_set()
+
+    def save(self):
+        v = self.var.get()
+        wo.Customers().set_loyalty(self.customer["id"], "auto" if v == "Automatic" else (0 if v == "None" else int(v)))
+        self.dlg.destroy()
+        self.screen.refresh()
+
+
+class DetailsDialog:
+    """Edit details…: the name, and a phone or email to add. Matching stays by phone and email, never by name; the
+    folder name stays as it was."""
+
+    def __init__(self, screen, customer):
+        self.screen, self.customer = screen, customer
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("ORCA - customer details")
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=18)
+        f.grid()
+        self.vars = {"name": tk.StringVar(value=customer.get("name") or ""), "phone": tk.StringVar(),
+                     "email": tk.StringVar()}
+        for r, (key, label) in enumerate((("name", "Name"), ("phone", "Add a phone"), ("email", "Add an email"))):
+            ttk.Label(f, text=label + ":").grid(row=r, column=0, sticky="w", pady=3)
+            ttk.Entry(f, textvariable=self.vars[key], width=30, font=FONT).grid(row=r, column=1, sticky="w", padx=8)
+        ttk.Label(f, text=f"Now: {', '.join(customer.get('phones', []) + customer.get('emails', [])) or '-'}",
+                  style="Small.TLabel", wraplength=400, justify="left").grid(row=3, column=0, columnspan=2, sticky="w",
+                                                                            pady=(6, 0))
+        self.error = ttk.Label(f, text="", style="Bad.TLabel", wraplength=400, justify="left")
+        self.error.grid(row=4, column=0, columnspan=2, sticky="w")
+        b = ttk.Frame(f)
+        b.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(b, text="Save", style="Print.TButton", command=self.save).pack(side="left")
+        ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        theme.dark_title_bar(dlg)
+        dlg.grab_set()
+
+    def save(self):
+        try:
+            wo.Customers().edit(self.customer["id"], self.vars["name"].get(), self.vars["phone"].get(),
+                                self.vars["email"].get())
+        except ValueError as e:
+            self.error.config(text=str(e))
+            return
+        self.dlg.destroy()
+        self.screen.refresh()
 
 
 # ------------------------------------------------------------------ Get Quote / Add Email
@@ -334,16 +611,24 @@ class QuoteScreen(Screen):
         self.total_lines = ttk.Label(totals, text="", justify="right", anchor="e")
         self.total_lines.grid(row=0, column=0, columnspan=4, sticky="e")
         ttk.Label(totals, text="Loyalty:").grid(row=1, column=1, sticky="e", pady=(8, 0))
-        self.loyalty = tk.StringVar(value="None")
-        lc = ttk.Combobox(totals, textvariable=self.loyalty, values=["None", "1", "2", "3"], state="readonly", width=6,
-                          font=FONT)
+        self.auto = (0, 0.0)  # (level, spent in 12 months) of the recognised customer, for Automatic
+        self.loyalty = tk.StringVar(value="Automatic")
+        self.loyalty_box = lc = ttk.Combobox(totals, textvariable=self.loyalty, state="readonly", width=40, font=FONT,
+                                             values=["Automatic", "None", "1", "2", "3"])
         lc.grid(row=1, column=2, sticky="w", padx=6, pady=(8, 0))
         lc.bind("<<ComboboxSelected>>", lambda _: self.reprice())
-        ttk.Label(totals, text="Change price (EUR):").grid(row=2, column=1, sticky="e", pady=(6, 0))
-        self.changed = tk.StringVar()
-        ttk.Entry(totals, textvariable=self.changed, width=10, font=FONT).grid(row=2, column=2, sticky="w", padx=6,
-                                                                                pady=(6, 0))
-        self.changed.trace_add("write", lambda *_: self.reprice())
+        # Prices are fixed: staff can only round the total (Tesla, 2026-11-17).
+        ttk.Label(totals, text="Round the total:").grid(row=2, column=1, sticky="e", pady=(6, 0))
+        self.rounding = None
+        self.round_buttons = {}
+        rb = ttk.Frame(totals)
+        rb.grid(row=2, column=2, sticky="w", padx=6, pady=(6, 0))
+        for k, (rmode, (text, _, _)) in enumerate(walkin_pricing.ROUNDINGS.items()):
+            b = ttk.Button(rb, text=text, width=10, command=lambda m=rmode: self.set_rounding(m))
+            b.grid(row=k % 2, column=k // 2, padx=(0, 4), pady=(0, 3))  # Down to … above Up to …
+            self.round_buttons[rmode] = b
+        ttk.Button(rb, text="No rounding", command=lambda: self.set_rounding(None)).grid(
+            row=0, column=3, rowspan=2, sticky="ns", padx=(8, 0), pady=(0, 3))
         self.total_label = ttk.Label(totals, text="", style="Big.TLabel")
         self.total_label.grid(row=3, column=0, columnspan=4, sticky="e", pady=(8, 0))
         self.problems = ttk.Label(right, text="", style="Bad.TLabel", justify="left", wraplength=760)
@@ -515,6 +800,17 @@ class QuoteScreen(Screen):
         except ValueError as e:
             self.editor_error.config(text=str(e))
             return
+        # An item the price list has no price for can't be added (prices are fixed: nobody types one).
+        trial = list(self.items)
+        index = len(trial) if self.editing is None else self.editing
+        trial[index:index + 1] = [item]
+        own = f"Item {index + 1}: "
+        pl = walkin_prices.current()
+        self.warn.config(text="\n".join(pl.warnings[:6]))  # the yellow line follows the file (missing, no prices yet)
+        problems = [p[len(own):] for p in walkin_pricing.price_order(pl, trial)["problems"] if p.startswith(own)]
+        if problems:
+            self.editor_error.config(text="\n".join(problems))
+            return
         self.editor_error.config(text="")
         if self.editing is None:
             self.items.append(item)
@@ -601,13 +897,33 @@ class QuoteScreen(Screen):
 
     # -------------------------------------------------------------- prices
 
+    def loyalty_choice(self):
+        """"auto" (Automatic) or the level 0-3 picked by hand."""
+        value = self.loyalty.get()
+        if value.startswith("Automatic"):
+            return "auto"
+        return 0 if value == "None" else int(value)
+
     def loyalty_level(self):
-        return 0 if self.loyalty.get() == "None" else int(self.loyalty.get())
+        choice = self.loyalty_choice()
+        return self.auto[0] if choice == "auto" else choice
+
+    def auto_text(self):
+        """The Automatic choice: with the recognised customer's level and spending."""
+        if self.filled_from is None:
+            return "Automatic"
+        level, spent = self.auto
+        return f"Automatic ({f'Level {level}' if level else 'no level yet'}, {euro(spent)} in 12 months)"
+
+    def set_rounding(self, mode):
+        """A rounding button: replaces any rounding; the same one again (or No rounding) goes back."""
+        self.rounding = None if mode == self.rounding else mode
+        self.reprice()
 
     def reprice(self):
         pl = walkin_prices.current()
         self.warn.config(text="\n".join(pl.warnings[:6]))
-        self.priced = walkin_pricing.price_order(pl, self.items, self.loyalty_level())
+        self.priced = walkin_pricing.price_order(pl, self.items, self.loyalty_level(), self.rounding)
         keep = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         self.drops = (self.drops + [[] for _ in self.items])[:len(self.items)]
@@ -630,33 +946,40 @@ class QuoteScreen(Screen):
         if loyalty:
             lines.append(f"{loyalty['text']}: -{euro(-loyalty['amount'])}" if loyalty["amount"] else loyalty["text"])
         self.total_lines.config(text="\n".join(lines))
-        total = self.priced["total"]
-        try:
-            changed = parse_money(self.changed.get())
-            if changed is None:
-                self.total_label.config(text=f"Total: {euro(total)}")
-            else:
-                diff = changed - total
-                self.total_label.config(text=f"Calculated {euro(total)}   ·   Changed {euro(changed)}   ·   "
-                                             f"Difference {'-' if diff < 0 else '+'}{euro(abs(diff))}")
-        except ValueError:
-            self.total_label.config(text=f"Total: {euro(total)}   ·   Change price: not an amount")
+        total, due = self.priced["total"], self.priced["due"]
+        if abs(due - total) < 0.005:
+            self.total_label.config(text=f"Total: {euro(total)}")
+        else:
+            way = "up" if due > total else "down"
+            self.total_label.config(text=f"Total: {euro(due)} (rounded {way} from {total:,.2f})")
+        for mode, b in self.round_buttons.items():
+            b.state(["pressed"] if mode == self.rounding else ["!pressed"])
         self.problems.config(text="\n".join(self.priced["problems"]))
 
     # -------------------------------------------------------------- the customer
 
     def lookup(self):
-        """A phone or email ORCA knows fills in the name and loyalty level (staff can change both)."""
+        """A phone or email ORCA knows fills in the name and loyalty: Automatic with the level their spending gives,
+        or the level set by hand (staff can change both)."""
         c = wo.Customers().lookup(self.cust_vars["phone"].get(), self.cust_vars["email"].get())
         if c and c["id"] != self.filled_from:
             self.filled_from = c["id"]
             self.cust_vars["name"].set(c["name"])
-            self.loyalty.set(str(c["loyalty"]) if c.get("loyalty") else "None")
+            level, mode, spent = wo.level_of(c)
+            self.auto = (walkin_prices.current().level_for(spent), spent)
+            self.loyalty_box.config(values=[self.auto_text(), "None", "1", "2", "3"])
+            self.loyalty.set(self.auto_text() if mode == "auto" else (str(level) if level else "None"))
             self.known.config(text=f"Known customer: {c['name']} ({', '.join(c['phones'] + c['emails'])})")
             self.reprice()
-        elif not c:
+        elif not c and self.filled_from is not None:
             self.known.config(text="")
             self.filled_from = None
+            self.auto = (0, 0.0)
+            auto = self.loyalty.get().startswith("Automatic")
+            self.loyalty_box.config(values=["Automatic", "None", "1", "2", "3"])
+            if auto:
+                self.loyalty.set("Automatic")
+            self.reprice()
 
     def discard(self):
         if self.items and not messagebox.askyesno(parent=self.win, title="ORCA",
@@ -678,12 +1001,12 @@ class QuoteScreen(Screen):
         if self.mode == "email" and not (name or wo.norm_phone(phone) or wo.norm_email(email)):
             messagebox.showwarning(parent=self.win, title="ORCA", message="Give a name, a phone or an email.")
             return
-        try:
-            changed = parse_money(self.changed.get())
-        except ValueError:
-            messagebox.showwarning(parent=self.win, title="ORCA", message="Change price: not an amount in EUR.")
-            return
         customers = wo.Customers()
+        keep = True
+        if not customers.known(phone, email):  # a first-time customer: keep their details? (2026-11-17_07)
+            keep = ask_keep(self.win)
+            if keep is None:
+                return  # closed: nothing is placed
         join = None
         clash = customers.conflict(phone, email)
         if clash:
@@ -691,9 +1014,12 @@ class QuoteScreen(Screen):
                                        message=f"This phone is {clash[0]['name'] or clash[0]['folder']} and this email "
                                                f"is {clash[1]['name'] or clash[1]['folder']} in ORCA. Same customer?")
         try:  # a name with no phone or email: a new customer every time (Customers.resolve)
-            customer = customers.resolve(name, phone, email, self.loyalty_level(), join=join)
+            if keep:
+                customer = customers.resolve(name, phone, email, self.loyalty_choice(), join=join)
+            else:  # Don't keep: no record; only what is needed to call them and hand the order over
+                customer = {"id": "x" + uuid.uuid4().hex[:10], "name": name}
             customer = dict(customer, entered_name=name, entered_phone=phone, entered_email=email)
-            order = wo.place(self.items, self.priced, customer, self.mode, self.priced["loyalty"], changed)
+            order = wo.place(self.items, self.priced, customer, self.mode, self.priced["loyalty"], keep_data=keep)
         except ValueError as e:
             messagebox.showwarning(parent=self.win, title="ORCA", message=str(e))
             return
@@ -722,10 +1048,10 @@ class QuoteScreen(Screen):
             copy_in_background(dialog.dlg, tasks, dialog.copied)
         self.items = []
         self.drops = []
-        self.changed.set("")
+        self.rounding = None
         for v in self.cust_vars.values():
             v.set("")
-        self.loyalty.set("None")
+        self.loyalty.set("Automatic")
         self.cancel_edit()
         self.reprice()
 
@@ -837,7 +1163,7 @@ class OrderList(Screen):
 
     def card(self, parent, order, buttons):
         box = ttk.LabelFrame(parent, text=f"#{order['number']}  ·  {order['source']}  ·  {euro(wo.price_due(order))}"
-                             + ("  (changed price)" if order.get("changed_total") is not None else ""),
+                             + wo.rounded_text(order).replace(" (", "  ("),
                              padding=10, style="Section.TLabelframe")
         box.columnconfigure(0, weight=1)
         times = order["times"]
@@ -1447,67 +1773,39 @@ class OrdersScreen(OrderList):
                 out.insert(0, (f"Layout done (item {i + 1})…", lambda k=i: SheetsDialog(self, order, k), "Print.TButton"))
         if order["status"] == "printed":
             out.insert(0, ("Ready for pickup", lambda: self.ready_for_pickup(order), "Print.TButton"))
-        out += [("Change price", lambda: self.change_price(order), None),
-                ("Collected", lambda: self.collected(order), None),
+        out += [("Collected", lambda: self.collected(order), None),
                 ("Cancel order", lambda: self.cancel(order), None)]
         return out
-
-    def change_price(self, order):
-        PriceDialog(self, order)
 
     def collected(self, order):
         if not messagebox.askyesno(parent=self.win, title="ORCA",
                                    message=f"Order #{order['number']}, {euro(wo.price_due(order))}: "
-                                           f"the customer has picked it up and paid?"):
+                                           f"the customer has picked it up and paid?" + self.gone_text(order)):
             return
         self.finish(order, False)
 
     def cancel(self, order):
+        kept = ("" if order.get("keep_data") is False else
+                " Its folder is kept in the customer's folder, marked cancelled.")
         if not messagebox.askyesno(parent=self.win, title="ORCA",
-                                   message=f"Cancel order #{order['number']}? Its folder is kept in the customer's "
-                                           f"folder, marked cancelled, and the number is free again."):
+                                   message=f"Cancel order #{order['number']}?{kept} The number is free again."
+                                           + self.gone_text(order)):
             return
         self.finish(order, True)
+
+    @staticmethod
+    def gone_text(order):
+        """A customer who said Don't keep: their order's folder is deleted for good."""
+        return ("\n\nThis customer didn't want their details kept: the order's folder is deleted for good "
+                "(only a line with no name stays in the sales list).") if order.get("keep_data") is False else ""
 
     def finish(self, order, cancelled):
         try:
             wo.finish(order, cancelled)
         except OSError as e:
             messagebox.showwarning(parent=self.win, title="ORCA",
-                                   message=f"Could not move the order folder (is a file in it open?).\n\n{e}")
+                                   message=f"Could not move or delete the order folder (is a file in it open?).\n\n{e}")
         self.signature = None
-
-
-class PriceDialog:
-    def __init__(self, screen, order):
-        self.screen, self.order = screen, order
-        self.dlg = dlg = tk.Toplevel(screen.win)
-        dlg.title(f"ORCA - #{order['number']} price")
-        dlg.transient(screen.win)
-        f = ttk.Frame(dlg, padding=18)
-        f.grid()
-        ttk.Label(f, text=f"Calculated price: {euro(order['total'])}").grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(f, text="Changed price (EUR, empty = calculated):").grid(row=1, column=0, sticky="w", pady=6)
-        self.var = tk.StringVar(value="" if order.get("changed_total") is None else f"{order['changed_total']:.2f}")
-        ttk.Entry(f, textvariable=self.var, width=10, font=FONT).grid(row=1, column=1, sticky="w", padx=6)
-        self.error = ttk.Label(f, text="", foreground=theme.ERROR)
-        self.error.grid(row=2, column=0, columnspan=2, sticky="w")
-        b = ttk.Frame(f)
-        b.grid(row=3, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(b, text="Save", style="Print.TButton", command=self.save).pack(side="left")
-        ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
-        theme.dark_title_bar(dlg)
-        dlg.grab_set()
-
-    def save(self):
-        try:
-            value = parse_money(self.var.get())
-        except ValueError:
-            self.error.config(text="Not an amount in EUR.")
-            return
-        wo.change_price(self.order, value)
-        self.screen.signature = None
-        self.dlg.destroy()
 
 
 class SheetsDialog:

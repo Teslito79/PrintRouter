@@ -2,8 +2,8 @@
 
 A copy of C:\\PrintHub\\Website\\lib\\products.ts and lib\\pricing.ts (read only, the website is never changed):
 the products with their options, choices and quantities, and the website prices. ORCA prices walk-in orders
-from ORCA_Walk-in_Prices.xlsx (walkin_prices.py); these website prices are what an empty or unreadable
-cell there falls back to, and everything when the spreadsheet can't be read.
+only from Walk-in_Prices.xlsx (walkin_prices.py, 2026-11-17_07): the website prices below are no longer used for
+walk-in prices (an empty cell there means "no price"); the products, options and the rules' tiers still come from here.
 When the website's catalogue changes, change this copy the same way.
 """
 
