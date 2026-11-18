@@ -5,6 +5,7 @@ the print queue in walkin_queue. Walk-in orders are never mixed with PrintHub (w
 Files can be dropped from Explorer onto an item wherever an open order's items show (filedrop.py): they are copied
 into the item's folder (the original stays), or kept with the quote until Place order.
 """
+import ctypes
 import datetime
 import math
 import os
@@ -214,6 +215,86 @@ def copy_in_background(widget, tasks, done):
     widget.after(100, wait)
 
 
+def work_area(window):
+    """(left, top, right, bottom) in pixels of the work area (screen minus taskbar) of the monitor the window is on;
+    the whole Tk screen when Windows can't say."""
+    try:
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT), ("rcWork", wintypes.RECT),
+                        ("dwFlags", wintypes.DWORD)]
+
+        u32 = ctypes.windll.user32
+        u32.MonitorFromWindow.restype = ctypes.c_void_p
+        u32.MonitorFromWindow.argtypes = (ctypes.c_void_p, wintypes.DWORD)
+        u32.GetMonitorInfoW.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        hwnd = u32.GetParent(window.winfo_id()) or window.winfo_id()
+        mon = u32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if mon and u32.GetMonitorInfoW(mon, ctypes.byref(info)):
+            r = info.rcWork
+            if r.right > r.left and r.bottom > r.top:
+                return r.left, r.top, r.right, r.bottom
+    except Exception:
+        pass
+    return 0, 0, window.winfo_screenwidth(), window.winfo_screenheight()
+
+
+class FormScroll(ttk.Frame):
+    """A part of a form that scrolls up and down when it is taller than the room it gets (2026-11-17_11): the
+    scrollbar shows only then, and the mouse wheel over the fields scrolls it (never a combobox's value)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.canvas = tk.Canvas(self, background=theme.SURFACE, highlightthickness=0, borderwidth=0)
+        self.bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.inner = ttk.Frame(self.canvas)
+        self._item = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.canvas.configure(yscrollcommand=self._scrolled)
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.inner.bind("<Configure>", self._inner_changed)
+        self.bind_all("<MouseWheel>", self._wheel_all, add="+")
+
+    def _inner_changed(self, _=None):
+        """The canvas asks for the fields' full size (the grid gives less when the window is short)."""
+        self.canvas.configure(scrollregion=(0, 0, self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()),
+                              width=self.inner.winfo_reqwidth(), height=self.inner.winfo_reqheight())
+
+    def _scrolled(self, lo, hi):
+        self.bar.set(lo, hi)
+        if float(lo) <= 0.0 and float(hi) >= 1.0:
+            self.bar.grid_remove()
+        else:
+            self.bar.grid(row=0, column=1, sticky="ns")
+
+    def needed(self):
+        lo, hi = self.canvas.yview()
+        return lo > 0.0 or hi < 1.0
+
+    def wheel(self, event):
+        if self.needed():
+            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+        return "break"
+
+    def _wheel_all(self, event):
+        try:
+            if str(event.widget).startswith(str(self.canvas)) and self.winfo_ismapped():
+                self.wheel(event)
+        except tk.TclError:
+            pass
+
+    def guard(self, widget):
+        """A combobox in the form: the wheel scrolls the form instead of changing its value."""
+        widget.bind("<MouseWheel>", self.wheel)
+
+    def top(self):
+        self.canvas.yview_moveto(0)
+
+
 class Screen:
     """A screen window: title bar text, Back at the top left, closing with the X goes back too."""
 
@@ -221,8 +302,7 @@ class Screen:
         self.ctx, self.on_back = ctx, on_back
         self.win = win = tk.Toplevel(ctx.root)
         win.title(f"ORCA - {title}")
-        win.geometry(size)
-        win.minsize(980, 620)
+        self.fit(size)
         win.protocol("WM_DELETE_WINDOW", self.back)
         self.frame = f = ttk.Frame(win, padding=16)
         f.grid(sticky="nsew")
@@ -243,6 +323,21 @@ class Screen:
         style.configure("Bad.TLabel", foreground=theme.ERROR)
         style.configure("Good.TLabel", foreground=theme.OK)
         style.configure("Walkin.TButton", font=("Segoe UI", 20, "bold"), padding=(24, 30))
+
+    def fit(self, size):
+        """Open at `size` (designed at 100% Windows scaling), grown with the scaling, but never bigger than the work
+        area of the screen ORCA is on (the screen minus the taskbar), centred on it (2026-11-17_11)."""
+        win = self.win
+        req_w, req_h = (int(v) for v in size.split("x"))
+        scale = max(1.0, win.winfo_fpixels("1i") / 96)
+        left, top, right, bottom = work_area(getattr(self.ctx, "win", None) or win)
+        title = round(32 * scale)  # the title bar, outside the size Tk sets
+        w = min(round(req_w * scale), right - left - 16)
+        h = min(round(req_h * scale), bottom - top - title - 8)
+        x = left + max(0, (right - left - w) // 2)
+        y = top + max(0, (bottom - top - title - h) // 2)
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        win.minsize(min(round(760 * scale), w), min(round(500 * scale), h))
 
     def ready(self):
         theme.dark_title_bar(self.win)
@@ -978,8 +1073,11 @@ class QuoteScreen(Screen):
                           values=["Document"] + [p["name"] for p in cat.PRODUCTS])
         cb.grid(row=0, column=1, sticky="w", pady=3)
         cb.bind("<<ComboboxSelected>>", lambda _: self.what_changed())
-        self.options = ttk.Frame(self.editor)
-        self.options.grid(row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        # Only the fields scroll (2026-11-17_11): Add item, the drop box, the customer and Place order stay in view.
+        self.form = FormScroll(self.editor)
+        self.form.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(6, 0))
+        self.editor.rowconfigure(1, weight=1)
+        self.options = self.form.inner
         buttons = ttk.Frame(self.editor)
         buttons.grid(row=2, column=0, columnspan=2, sticky="we", pady=(12, 0))
         buttons.columnconfigure(1, weight=1)
@@ -1021,7 +1119,7 @@ class QuoteScreen(Screen):
         totals.grid(row=3, column=0, sticky="we", pady=(8, 0))
         totals.columnconfigure(0, weight=1)
         self.total_lines = ttk.Label(totals, text="", justify="right", anchor="e")
-        self.total_lines.grid(row=0, column=0, columnspan=4, sticky="e")
+        self.total_lines.grid(row=1, column=0, rowspan=2, sticky="ne", padx=(0, 16), pady=(8, 0))  # beside, not above
         ttk.Label(totals, text="Loyalty:").grid(row=1, column=1, sticky="e", pady=(8, 0))
         self.auto = (0, 0.0)  # (level, spent in 12 months) of the recognised customer, for Automatic
         self.loyalty = tk.StringVar(value="Automatic")
@@ -1050,10 +1148,12 @@ class QuoteScreen(Screen):
             ttk.Entry(cust, textvariable=self.cust_vars[key], width=24, font=FONT).grid(row=0, column=c * 2 + 1)
         for key in ("phone", "email"):
             self.cust_vars[key].trace_add("write", lambda *_: self.lookup())
-        ttk.Label(cust, text=("* required. Email optional." if mode == "quote" else f"Name, phone, email: {need}."),
-                  style="Small.TLabel").grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
-        self.known = ttk.Label(cust, text="", style="Good.TLabel")
-        self.known.grid(row=2, column=0, columnspan=6, sticky="w")
+        info = ttk.Frame(cust)  # the hint and "Known customer" share one line (2026-11-17_11)
+        info.grid(row=1, column=0, columnspan=6, sticky="w", pady=(4, 0))
+        ttk.Label(info, text=("* required. Email optional." if mode == "quote" else f"Name, phone, email: {need}."),
+                  style="Small.TLabel").pack(side="left")
+        self.known = ttk.Label(info, text="", style="Good.TLabel")
+        self.known.pack(side="left", padx=(24, 0))
         actions = ttk.Frame(f)
         actions.grid(row=4, column=0, sticky="e", pady=(12, 0))
         ttk.Button(actions, text="Discard", command=self.discard).pack(side="left", padx=(0, 10))
@@ -1075,18 +1175,20 @@ class QuoteScreen(Screen):
 
         def combo(label, values, value, typed=False):
             nonlocal row
-            ttk.Label(self.options, text=label + ":").grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Label(self.options, text=label + ":").grid(row=row, column=0, sticky="w", pady=2)
             var = tk.StringVar(value=value)
-            ttk.Combobox(self.options, textvariable=var, values=values, state="normal" if typed else "readonly",
-                         width=28, font=FONT).grid(row=row, column=1, sticky="w", pady=3)
+            cb = ttk.Combobox(self.options, textvariable=var, values=values, state="normal" if typed else "readonly",
+                              width=28, font=FONT)
+            cb.grid(row=row, column=1, sticky="w", pady=2)
+            self.form.guard(cb)  # the wheel scrolls the form, never the value
             row += 1
             return var
 
         def entry(label, value, width=8):
             nonlocal row
-            ttk.Label(self.options, text=label + ":").grid(row=row, column=0, sticky="w", pady=3)
+            ttk.Label(self.options, text=label + ":").grid(row=row, column=0, sticky="w", pady=2)
             var = tk.StringVar(value=str(value))
-            ttk.Entry(self.options, textvariable=var, width=width, font=FONT).grid(row=row, column=1, sticky="w", pady=3)
+            ttk.Entry(self.options, textvariable=var, width=width, font=FONT).grid(row=row, column=1, sticky="w", pady=2)
             row += 1
             return var
 
@@ -1106,10 +1208,14 @@ class QuoteScreen(Screen):
             v["paper"] = combo("Paper", papers if d["paper"] in papers else papers + [d["paper"]], d["paper"])
             v["finish"] = combo("Finishing", list(FINISH_CHOICES),
                                 next(k for k, x in FINISH_CHOICES.items() if x == d["finish"]))
-            v["lam"] = tk.BooleanVar(value=d["lam"])
-            ttk.Checkbutton(self.options, text="Laminate", variable=v["lam"]).grid(row=row, column=0, sticky="w", pady=3)
+            v["lam"] = tk.BooleanVar(value=d["lam"])  # Laminate and its sheets on one row (2026-11-17_11)
+            ttk.Checkbutton(self.options, text="Laminate", variable=v["lam"]).grid(row=row, column=0, sticky="w", pady=2)
+            lam = ttk.Frame(self.options)
+            lam.grid(row=row, column=1, sticky="w", pady=2)
+            ttk.Label(lam, text="Sheets to laminate (0 = all):").pack(side="left")
+            v["lam_sheets"] = tk.StringVar(value=str(d["lam_sheets"]))
+            ttk.Entry(lam, textvariable=v["lam_sheets"], width=6, font=FONT).pack(side="left", padx=(6, 0))
             row += 1
-            v["lam_sheets"] = entry("Sheets to laminate (0 = all)", d["lam_sheets"])
             v["cuts"] = entry("Cuts (how many)", d.get("cuts", 0))
         else:
             p = next(p for p in cat.PRODUCTS if p["name"] == self.what.get())
@@ -1123,20 +1229,21 @@ class QuoteScreen(Screen):
         self.service_vars = {}
         chosen = (item or {}).get("services") or {}
         if pl.services:
-            ttk.Label(self.options, text="Services:").grid(row=row, column=0, sticky="nw", pady=(6, 3))
+            ttk.Label(self.options, text="Services:").grid(row=row, column=0, sticky="nw", pady=(4, 0))
             box = ttk.Frame(self.options)
-            box.grid(row=row, column=1, sticky="w", pady=(6, 3))
+            box.grid(row=row, column=1, sticky="w", pady=(4, 0))
             for k, name in enumerate(pl.services):
                 tick = tk.BooleanVar(value=name in chosen)
-                ttk.Checkbutton(box, text=name, variable=tick).grid(row=k, column=0, sticky="w")
+                ttk.Checkbutton(box, text=name, variable=tick, padding=0).grid(row=k, column=0, sticky="w", pady=0)
                 count = tk.StringVar(value=str(chosen[name]) if isinstance(chosen.get(name), int)
                                      and not isinstance(chosen.get(name), bool) else "")
                 if self.what.get() == "Document" and pl.services[name][1] == "piece":
                     ttk.Label(box, text="how many:").grid(row=k, column=1, sticky="e", padx=(10, 4))
-                    ttk.Entry(box, textvariable=count, width=6, font=FONT).grid(row=k, column=2, sticky="w")
+                    ttk.Entry(box, textvariable=count, width=6, font=FONT).grid(row=k, column=2, sticky="w", pady=0)
                 self.service_vars[name] = (tick, count)
             row += 1
         self.show_box()
+        self.form.top()  # a new form starts at its first field
         theme.on_surface(self.editor)
 
     # -------------------------------------------------------------- the drop box
@@ -1717,7 +1824,7 @@ class PrintJobsScreen(OrderList):
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Print Jobs", on_back)
-        self.win.geometry("1320x960")
+        self.fit("1320x960")
         self.run = ctx.print_queue
         self.run.parent = self.win
         ttk.Button(self.top, text="Start printing orders", style="Print.TButton", command=self.start).pack(
