@@ -290,7 +290,7 @@ def read_total(address, community="public", timeout=TIMEOUT):
     return int(value) if isinstance(value, int) else None
 
 
-def read_copier(address, community="public", timeout=TIMEOUT):
+def read_copier(address, community="public", timeout=TIMEOUT, page=True):
     """Everything one copier answers: {"ok", "version", "model", "counters", "toners", "raw", "error"}.
     counters: total / black / colour, each an int or None (not given). toners: colour -> percent or None."""
     result = {"ok": False, "version": None, "model": "", "counters": {"total": None, "black": None, "colour": None},
@@ -309,7 +309,7 @@ def read_copier(address, community="public", timeout=TIMEOUT):
         result.update(ok=True, version="v2c" if version else "v1", error=None)
         break
     else:
-        return result
+        return result  # no SNMP answer: the page isn't read either (no toner levels, nothing recorded)
     try:
         result["model"] = str(basics.get(OID_MODEL) or basics.get(OID_SYSDESCR) or "")
         result["sysdescr"] = str(basics.get(OID_SYSDESCR) or "")
@@ -347,7 +347,25 @@ def read_copier(address, community="public", timeout=TIMEOUT):
                 result["counters"][key] = found[key]
     except (OSError, ValueError, IndexError) as e:
         result["error"] = f"partly read: {e}"
+    if page:
+        add_page_counts(result, address)
     return result
+
+
+def add_page_counts(result, address):
+    """The copier's counter page (counter_page.py, 2026-11-18_01) gives the B&W and colour counts the SNMP Ricoh
+    counter table leaves empty: Black / Colour count in pages. result["page"]: the parsed page, or why not."""
+    import counter_page
+    try:
+        black, colour, parsed = counter_page.read_counts(address)
+    except counter_page.PageError as e:
+        result["page"] = {"ok": False, "error": str(e)}
+        return
+    result["page"] = {"ok": True, "parsed": parsed, "black": black, "colour": colour}
+    if result["counters"]["black"] is None:
+        result["counters"]["black"] = black
+    if result["counters"]["colour"] is None:
+        result["counters"]["colour"] = colour
 
 
 # ------------------------------------------------------------------ files
@@ -438,6 +456,8 @@ def history(changes, printers):
                 if prev is not None:
                     if colour != "black" and c["colour_count"] is not None and prev["colour_count"] is not None:
                         copies = c["colour_count"] - prev["colour_count"]
+                    elif colour == "black" and c["black"] is not None and prev["black"] is not None:
+                        copies = c["black"] - prev["black"]  # the counter page's B&W pages (2026-11-18_01)
                     elif c["total"] is not None and prev["total"] is not None:
                         copies = c["total"] - prev["total"]
                         if colour != "black":
@@ -709,6 +729,13 @@ class TonerWatch:
                 if not r["raw"]["counters"]:
                     lines.append("  none given")
                 lines += [f"  {name} = {value}" for name, value in r["raw"]["counters"]]
+                import counter_page
+                page = r.get("page") or {}
+                lines.append(f"Counter page ({counter_page.PATH}): "
+                             + (f"read, Black count {page['black']}, Colour count {page['colour']} (pages)"
+                                if page.get("ok") else f"not readable ({page.get('error') or 'not tried'})"))
+                if page.get("ok"):
+                    lines += counter_page.describe(page["parsed"])
                 missing = [n for k, n in (("total", "Total count"), ("black", "Black count"), ("colour", "Colour count"))
                            if r["counters"][k] is None]
                 missing += [f"{COLOUR_NAMES[c]} toner level" for c in COLOURS if r["toners"][c] is None]
@@ -810,7 +837,10 @@ class TonersScreen:
                     row += 1
                 for item in h["rows"]:
                     c = item["change"]
-                    counter = c["total"] if colour == "black" or c["colour_count"] is None else c["colour_count"]
+                    if colour == "black":
+                        counter = c["black"] if c["black"] is not None else c["total"]
+                    else:
+                        counter = c["colour_count"] if c["colour_count"] is not None else c["total"]
                     copies = "first reading" if item["first"] else (
                         f"{item['copies']:,} copies by the toner taken out" if item["copies"] is not None
                         else "copies unknown (no counter)")

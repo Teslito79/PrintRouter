@@ -421,6 +421,9 @@ class CopyCounterScreen(Screen):
     ctx.copy_counter (copy_counter.Manager), so it goes on when this window is closed (and after a restart)."""
 
     TYPE_NAMES = list(copy_counter.TYPES)
+    HOW_HINTS = {
+        "sheets": "The copier counts B&W / colour, A4 / A3 and the sides by itself: pick only the paper.",
+        "pages": "The copier counts B&W / colour by itself: pick the size, the sides and the paper."}
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Copy counter", on_back, size="1500x900")
@@ -430,6 +433,7 @@ class CopyCounterScreen(Screen):
         self.messages = {}  # copier -> a line for its panel (no answer, refused, …)
         self.finishing = set()
         self.reading = set()
+        self.built_how = {}  # copier -> how its panel was built (a fallback while counting rebuilds it)
         body = ttk.Frame(self.frame)
         body.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
         self.frame.rowconfigure(2, weight=1)
@@ -510,17 +514,37 @@ class CopyCounterScreen(Screen):
     def build_counting(self, box, pid, counter, message):
         d = counter.data
         r = 0
+        how = counter.how if d["mode"] == "counter" else "typed"
+        self.built_how[pid] = how
         head = "Counting" if d["mode"] == "counter" else "Typing the copies (the copier didn't answer)"
         ttk.Label(box, text=head, style="Big.TLabel").grid(row=r, column=0, sticky="w")
         r += 1
-        types = ttk.Frame(box)
-        types.grid(row=r, column=0, sticky="w", pady=(8, 0))
-        var = tk.StringVar(value=d["current"]["type"])
-        for k, name in enumerate(self.TYPE_NAMES):
-            ttk.Radiobutton(types, text=name, value=name, variable=var,
-                            command=lambda v=var: self.change(pid, type=v.get())).grid(row=k // 2, column=k % 2,
-                                                                                      sticky="w", padx=(0, 14))
-        r += 1
+        if how in self.HOW_HINTS:  # the copier's page: what it counts by itself
+            ttk.Label(box, text=self.HOW_HINTS[how], style="Hint.TLabel", wraplength=440, justify="left").grid(
+                row=r, column=0, sticky="w", pady=(4, 0))
+            r += 1
+        elif how == "total":
+            ttk.Label(box, text=copy_counter.FALLBACK_TEXT, style="Warn.TLabel", wraplength=440, justify="left").grid(
+                row=r, column=0, sticky="w", pady=(4, 0))
+            r += 1
+        if how in ("total", "typed"):  # 10's way: staff pick the copy type
+            types = ttk.Frame(box)
+            types.grid(row=r, column=0, sticky="w", pady=(8, 0))
+            var = tk.StringVar(value=d["current"]["type"])
+            for k, name in enumerate(self.TYPE_NAMES):
+                ttk.Radiobutton(types, text=name, value=name, variable=var,
+                                command=lambda v=var: self.change(pid, type=v.get())).grid(
+                    row=k // 2, column=k % 2, sticky="w", padx=(0, 14))
+            r += 1
+        elif how == "pages":  # MP C3004 mode: colour is counted, staff pick the size
+            sizes = ttk.Frame(box)
+            sizes.grid(row=r, column=0, sticky="w", pady=(8, 0))
+            zvar = tk.StringVar(value=copy_counter.TYPES[d["current"]["type"]][0])
+            for size in ("A4", "A3"):
+                ttk.Radiobutton(sizes, text=size, value=size, variable=zvar,
+                                command=lambda: self.change(pid, type=f"{zvar.get()} B&W")).pack(side="left",
+                                                                                                 padx=(0, 14))
+            r += 1
         pl = walkin_prices.current()
         papers = [p for p in pl.papers if p != walkin_prices.LABEL_SHEET] or [copy_counter.FIRST_PAPER]
         if copy_counter.FIRST_PAPER in papers:
@@ -534,13 +558,14 @@ class CopyCounterScreen(Screen):
         cb.pack(side="left", padx=6)
         cb.bind("<<ComboboxSelected>>", lambda _: self.change(pid, paper=pvar.get()))
         r += 1
-        sides = ttk.Frame(box)
-        sides.grid(row=r, column=0, sticky="w", pady=(6, 0))
-        svar = tk.StringVar(value=d["current"]["sides"])
-        for value, text in (("single", "One side"), ("double", "Both sides")):
-            ttk.Radiobutton(sides, text=text, value=value, variable=svar,
-                            command=lambda: self.change(pid, sides=svar.get())).pack(side="left", padx=(0, 14))
-        r += 1
+        if how != "sheets":  # with the sheets reading the copier counts one side / both sides by itself
+            sides = ttk.Frame(box)
+            sides.grid(row=r, column=0, sticky="w", pady=(6, 0))
+            svar = tk.StringVar(value=d["current"]["sides"])
+            for value, text in (("single", "One side"), ("double", "Both sides")):
+                ttk.Radiobutton(sides, text=text, value=value, variable=svar,
+                                command=lambda: self.change(pid, sides=svar.get())).pack(side="left", padx=(0, 14))
+            r += 1
         if d["mode"] == "typed":
             typed = ttk.Frame(box)
             typed.grid(row=r, column=0, sticky="w", pady=(6, 0))
@@ -594,10 +619,16 @@ class CopyCounterScreen(Screen):
             return
         d = counter.data
         try:
-            segs = [counter.segment_text(s) for s in counter.segments_now()]
+            segs = counter.lines()
             if d["mode"] == "counter" and not counter.current_copies():
-                segs.append(f"{d['current']['type']}, {d['current']['paper']}, "
-                            f"{copy_counter.SIDES[d['current']['sides']]}: 0 copies so far")
+                if counter.how == "sheets":
+                    segs.append(f"{d['current']['paper']}: 0 copies so far")
+                elif counter.how == "pages":
+                    segs.append(f"{copy_counter.TYPES[d['current']['type']][0]}, {d['current']['paper']}, "
+                                f"{copy_counter.SIDES[d['current']['sides']]}: 0 copies so far")
+                else:
+                    segs.append(f"{d['current']['type']}, {d['current']['paper']}, "
+                                f"{copy_counter.SIDES[d['current']['sides']]}: 0 copies so far")
             live["segs"].config(text="\n".join(segs) or "No copies yet")
             priced = counter.priced()
             live["total"].config(text=self.total_text(priced),
@@ -791,7 +822,12 @@ class CopyCounterScreen(Screen):
                     self.messages[p] = f"Couldn't read the counter ({result}): trying again."
                 elif self.messages.get(p, "").startswith("Couldn't read the counter"):
                     self.messages.pop(p, None)
-                if p not in self.finishing:
+                if p in self.finishing:
+                    return
+                c = self.manager.counters.get(p)
+                if c is not None and self.built_how.get(p) not in (None, c.how):
+                    self.build(p)  # the page stopped answering: the copy type and sides come back
+                else:
                     self.refresh_live(p)
 
             self.in_background(pid, counter.poll, done)
