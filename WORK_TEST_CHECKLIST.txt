@@ -90,3 +90,8 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    load says "First load: from tomorrow ORCA shows what sold"). Set On display for 3 items (On display…).
    The next day, after one of them sold in Shopify, export and load again: Sold lists it, and the
    Restock list says how many to bring. Press Restocked, and Print the list on the receipt printer.
+20. Categories and low stock: after a Shopify load, filter by each of the five categories (Inks and
+   toners, Diaries and calendars, School bags, Notebooks, Art supplies) and look at a few products in
+   each; open Categories… and check the count line. Pick a category in the filter, press Minimum… and
+   give it a number. Then press Low stock: it lists the items under that minimum (Order more) and any
+   displayed item whose storage can't fill the display (Low).

@@ -11,6 +11,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+import categories
 import costs
 import filedrop
 import inventory as inv
@@ -90,12 +91,13 @@ class InventoryScreen(Screen):
         box.grid(row=2, column=0, sticky="nsew")
         box.columnconfigure(0, weight=1)
         box.rowconfigure(0, weight=1)
-        self.tree = ttk.Treeview(box, columns=[c for c, _, _ in self.COLUMNS], show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(box, columns=[c for c, _, _ in self.COLUMNS], show="headings", selectmode="extended")
         for key, text, width in self.COLUMNS:
             self.tree.heading(key, text=text, anchor="w", command=lambda k=key: self.sort(k))
             self.tree.column(key, width=width, anchor="w")
         self.tree.tag_configure("low", foreground=theme.ERROR)
         self.tree.tag_configure("gone", foreground=theme.MUTED)
+        self.tree.tag_configure("lowish", foreground=theme.WARN)
         self.tree.grid(row=0, column=0, sticky="nsew")
         bar = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
         bar.grid(row=0, column=1, sticky="ns")
@@ -104,8 +106,8 @@ class InventoryScreen(Screen):
         row = ttk.Frame(f)
         row.grid(row=3, column=0, sticky="we", pady=(10, 0))
         for text, command in (("Delivery…", self.delivery), ("Used / broken…", self.used), ("Count…", self.count),
-                              ("On display…", self.on_display), ("History…", self.history), ("Edit…", self.edit),
-                              ("Remove", self.remove)):
+                              ("On display…", self.on_display), ("Minimum…", self.minimum),
+                              ("History…", self.history), ("Edit…", self.edit), ("Remove", self.remove)):
             ttk.Button(row, text=text, command=command).pack(side="left", padx=(0, 8))
         self.message = ttk.Label(f, text="", style="Small.TLabel")
         self.message.grid(row=4, column=0, sticky="w", pady=(6, 0))
@@ -124,6 +126,9 @@ class InventoryScreen(Screen):
         end_btn = ttk.Button(day, text="End of day: load Shopify stock…", command=self.load_shopify)
         end_btn.pack(side="left")
         ttk.Button(day, text="Restock", command=self.restock).pack(side="left", padx=(8, 0))
+        self.low_btn = ttk.Button(day, text="Low stock", command=self.low_stock)
+        self.low_btn.pack(side="left", padx=(8, 0))
+        ttk.Button(day, text="Categories…", command=self.categories).pack(side="left", padx=(8, 0))
         # The drop box (2026-11-19_10, Tesla: "make it drag and drop"): the Shopify export runs the end-of-day load,
         # any other .csv / .xlsx Import list. Dropping on those two buttons does the same.
         self.drop_box = tk.Label(day, text="⤓  Drop the Shopify stock file or an item list here", background=theme.FIELD,
@@ -177,6 +182,8 @@ class InventoryScreen(Screen):
             return "Count it"
         if it.get("minimum") is not None and it.get("stock", 0) < it["minimum"]:
             return "Order more"
+        if inv.is_low(it):  # 2026-11-19_11: storage can't fill the display once more
+            return f"Low: {shop.storage(it)} in storage"
         return ""
 
     def fill(self, select=None):
@@ -192,7 +199,7 @@ class InventoryScreen(Screen):
                       euro(it["price"]) if it.get("price") is not None else "not for sale",
                       it["display"] if shown else "", (it.get("shelf") or 0) if shown else "",
                       shop.storage(it) if shown else "", status)
-            tag = ("gone",) if it.get("gone") else ("low",) if status else ()
+            tag = ("gone",) if it.get("gone") else ("lowish",) if status.startswith("Low") else ("low",) if status else ()
             self.tree.insert("", "end", iid=it["id"], values=values, tags=tag)
         if keep and self.tree.exists(keep):
             self.tree.selection_set(keep)
@@ -202,6 +209,8 @@ class InventoryScreen(Screen):
         n = len(shop.restock_lines(self.inventory))
         try:
             self.restock_line.config(text=f"Restock: {n} item{'' if n == 1 else 's'}" if n else "")
+            low = len(self.inventory.low_stock())
+            self.low_btn.config(text=f"Low stock ({low})" if low else "Low stock")
         except AttributeError:
             pass
 
@@ -280,6 +289,26 @@ class InventoryScreen(Screen):
     def restock(self):
         RestockWindow(self)
 
+    def low_stock(self):
+        LowStockWindow(self)
+
+    def categories(self):
+        CategoriesWindow(self)
+
+    def minimum(self):
+        """One minimum for many (2026-11-19_11): the selected rows, or (none selected) the whole category picked in the
+        category filter. Empty clears it; logged."""
+        ids = list(self.tree.selection())
+        what = f"{len(ids)} selected items"
+        if not ids and self.category.get() not in ("", "All"):
+            ids = [it["id"] for it in self.inventory.items if (it.get("category") or "") == self.category.get()]
+            what = f"every item in “{self.category.get()}” ({len(ids)})"
+        if not ids:
+            messagebox.showwarning(parent=self.win, title="Inventory",
+                                   message="Select items (or pick a category in the filter) first.")
+            return
+        MinimumDialog(self, ids, what)
+
     def load_shopify(self, path=None):
         """End of day: load Shopify stock (a CSV exported from Shopify), then show Sold / Came in and the restock
         list."""
@@ -315,6 +344,8 @@ class InventoryScreen(Screen):
             return None
         self.reload()
         LoadReport(self, result)
+        if self.inventory.low_stock():  # 2026-11-19_11: the order list after each load, when anything is low
+            self.win.after(400, lambda: LowStockWindow(self))
         return result
 
     def history(self):
@@ -430,6 +461,7 @@ class ItemDialog:
                      "notes": tk.StringVar(value=it.get("notes", "")),
                      "display": tk.StringVar(value="" if it.get("display") is None else str(it["display"]))}
         self.price_before = it.get("price")
+        self.category_before = it.get("category") or ""
         rows = (("Name *", "name", ttk.Entry, {"width": 32}),
                 ("Category", "category", ttk.Combobox, {"values": screen.inventory.categories(), "width": 30}),
                 ("Barcodes (scan or type, spaces between)", "barcodes", ttk.Entry, {"width": 32}),
@@ -479,6 +511,7 @@ class ItemDialog:
         if price != self.price_before and not self.screen.prices_open:
             raise ValueError("Sale price: needs the Prices password (Unlock sale price…).")
         self.display = inv.number(v["display"], "On display", low=0)
+        self.category_changed = v["category"].strip() != (self.category_before or "")
         return {"name": v["name"].strip(), "category": v["category"].strip(), "barcodes": codes,
                 "unit": v["unit"].strip() or "piece", "per_unit": inv.number(v["per_unit"], "Pieces in one unit", low=1) or 1,
                 "stock": inv.number(v["stock"], "In stock") or 0,
@@ -488,6 +521,8 @@ class ItemDialog:
     def done(self):
         try:
             values = self.values()
+            if self.category_changed:  # typed or picked by hand: the rules never change it again (2026-11-19_11)
+                values["category_hand"] = bool(values["category"])
             if self.item_id:
                 values.pop("stock")
                 self.screen.inventory.edit(self.item_id, values)
@@ -633,6 +668,275 @@ def print_lines(ctx, header, lines, path):
     receipt.lines_pdf(path, header, [(line, "") for line in lines], None)
     printing.send(path, ctx.rules["receipt_printer"])
     return path
+
+
+class MinimumDialog:
+    """Minimum… for many items at once; empty clears it. Each change logged."""
+
+    def __init__(self, screen, ids, what):
+        self.screen, self.ids = screen, ids
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("Minimum")
+        dlg.resizable(False, False)
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=20)
+        f.grid()
+        ttk.Label(f, text=f"Minimum for {what} (pieces; empty: no warning):").grid(row=0, column=0, sticky="w")
+        self.var = tk.StringVar()
+        e = ttk.Entry(f, textvariable=self.var, width=8, font=FONT)
+        e.grid(row=0, column=1, sticky="w", padx=6)
+        e.focus_set()
+        self.error = ttk.Label(f, text="", style="Bad.TLabel")
+        self.error.grid(row=1, column=0, columnspan=2, sticky="w")
+        b = ttk.Frame(f)
+        b.grid(row=2, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(b, text="OK", style="Print.TButton", command=self.done).pack(side="left")
+        ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        dlg.bind("<Return>", lambda _: self.done())
+        theme.dark_title_bar(dlg)
+        dlg.grab_set()
+
+    def done(self):
+        try:
+            value = inv.number(self.var.get(), "Minimum", low=0)
+        except ValueError as e:
+            self.error.config(text=str(e))
+            return
+        set_minimum(self.screen.inventory, self.ids, value)
+        self.dlg.destroy()
+        self.screen.reload()
+
+
+def set_minimum(inventory, ids, value):
+    """The same minimum on many items (None clears it); logged per item that changes."""
+    for item_id in ids:
+        item = inventory.get(item_id)
+        if item is None or item.get("minimum") == value:
+            continue
+        old = item.get("minimum")
+        item["minimum"] = value
+        inv.log(item, 0, f"minimum {'-' if old is None else old} -> {'-' if value is None else value}")
+    inventory.save()
+
+
+class LowStockWindow:
+    """Low stock (2026-11-19_11): every item "Order more" (under its minimum) or Low (storage can't fill the display
+    once more), by category then name, with stock, minimum, on display and in storage. Print (XP-80C) / Save PDF
+    (A4), no money: the order list for suppliers."""
+
+    COLS = (("name", "Item", 300), ("category", "Category", 150), ("stock", "In stock", 110), ("minimum", "Minimum", 90),
+            ("display", "On display", 90), ("storage", "In storage", 90), ("why", "", 170))
+
+    def __init__(self, screen):
+        self.screen = screen
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("Low stock")
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=16)
+        f.grid(sticky="nsew")
+        items = self.items()
+        ttk.Label(f, text=f"Low stock ({len(items)})", style="Big.TLabel").grid(row=0, column=0, sticky="w")
+        tree = ttk.Treeview(f, columns=[c for c, _, _ in self.COLS], show="headings", height=min(20, max(4, len(items))))
+        for key, text, width in self.COLS:
+            tree.heading(key, text=text, anchor="w")
+            tree.column(key, width=width, anchor="w")
+        tree.tag_configure("order", foreground=theme.ERROR)
+        tree.tag_configure("low", foreground=theme.WARN)
+        for it in items:
+            why = self.why(it)
+            tree.insert("", "end", values=(it["name"], it.get("category") or "", inv.qty_text(it),
+                                           "" if it.get("minimum") is None else it["minimum"],
+                                           "" if it.get("display") is None else it["display"],
+                                           shop.storage(it), why), tags=("order",) if why == "Order more" else ("low",))
+        tree.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        self.tree = tree
+        b = ttk.Frame(f)
+        b.grid(row=2, column=0, sticky="e", pady=(10, 0))
+        if screen.ctx.rules.get("receipt_printer"):
+            ttk.Button(b, text="Print", command=self.print_receipt).pack(side="left")
+        ttk.Button(b, text="Save PDF…", command=self.save_pdf).pack(side="left", padx=(8, 0))
+        ttk.Button(b, text="Close", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        theme.dark_title_bar(dlg)
+
+    def items(self):
+        return sorted(self.screen.inventory.low_stock(),
+                      key=lambda it: ((it.get("category") or "").lower(), it["name"].lower()))
+
+    @staticmethod
+    def why(it):
+        if it.get("minimum") is not None and it.get("stock", 0) < it["minimum"]:
+            return "Order more"
+        return f"Low: {shop.storage(it)} in storage"
+
+    def lines(self):
+        out = []
+        for it in self.items():
+            extra = [f"in stock {it.get('stock', 0)}"]
+            if it.get("minimum") is not None:
+                extra.append(f"minimum {it['minimum']}")
+            if it.get("display") is not None:
+                extra.append(f"on display {it['display']}, in storage {shop.storage(it)}")
+            out.append(f"{it['name']}: {self.why(it)} ({', '.join(extra)})")
+        return out
+
+    def print_receipt(self, path=None):
+        import walkin_print
+        path = path or walkin_print.WORK_DIR / "low_stock.pdf"
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        return print_lines(self.screen.ctx, [datetime.datetime.now().strftime("%d/%m/%Y  %H:%M"), "Low stock"],
+                           self.lines(), path)
+
+    def save_pdf(self, path=None):
+        path = path or filedialog.asksaveasfilename(parent=self.dlg, title="Save PDF", defaultextension=".pdf",
+                                                    initialfile=f"Low stock {datetime.date.today()}.pdf",
+                                                    filetypes=[("PDF", "*.pdf")])
+        if path:
+            a4_pdf(path, f"Low stock {datetime.datetime.now():%d/%m/%Y %H:%M}", self.lines())
+        return path
+
+
+class CategoriesWindow:
+    """Categories… (2026-11-19_11, open to staff): the rules in order (name, words, not-words, how many items each
+    gives now), add / rename / remove / move up and down, a live preview of the items the selected rule gives,
+    "1235 items have no category" (click: the list), Apply now and Cancel (nothing changes until Apply now)."""
+
+    def __init__(self, screen):
+        self.screen = screen
+        self.rules = categories.rules_of(screen.inventory)
+        self.selected = 0 if self.rules else None
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("Categories")
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=16)
+        f.grid(sticky="nsew")
+        self.f = f
+        ttk.Label(f, text="Categories by name", style="Big.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(f, text="A name gets the first category with any of its words and none of its not-words. Whole words "
+                          "only, case ignored; ^word: the first word of the name. Categories set by hand are never "
+                          "changed.", style="Hint.TLabel", wraplength=900, justify="left").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        self.list = ttk.Treeview(f, columns=("name", "count"), show="headings", height=8, selectmode="browse")
+        self.list.heading("name", text="Category", anchor="w")
+        self.list.heading("count", text="Items", anchor="w")
+        self.list.column("name", width=230, anchor="w")
+        self.list.column("count", width=70, anchor="w")
+        self.list.grid(row=2, column=0, sticky="nsw")
+        self.list.bind("<<TreeviewSelect>>", lambda _: self.picked())
+        side = ttk.Frame(f)
+        side.grid(row=2, column=1, sticky="nw", padx=(16, 0))
+        self.name_var, self.words_var, self.not_var = tk.StringVar(), tk.StringVar(), tk.StringVar()
+        for r, (label, var, width) in enumerate((("Name:", self.name_var, 30), ("Words:", self.words_var, 70),
+                                                 ("Not-words:", self.not_var, 70))):
+            ttk.Label(side, text=label).grid(row=r, column=0, sticky="w", pady=3)
+            e = ttk.Entry(side, textvariable=var, width=width, font=FONT)
+            e.grid(row=r, column=1, sticky="w", pady=3, padx=(6, 0))
+            var.trace_add("write", lambda *_: self.typed())
+        ttk.Label(side, text="Words and not-words: comma separated (toner, toners, ^ink).", style="Hint.TLabel").grid(
+            row=3, column=1, sticky="w")
+        b = ttk.Frame(side)
+        b.grid(row=4, column=1, sticky="w", pady=(6, 0))
+        for text, command in (("Add", self.add), ("Remove", self.remove), ("Move up", lambda: self.move(-1)),
+                              ("Move down", lambda: self.move(1))):
+            ttk.Button(b, text=text, command=command).pack(side="left", padx=(0, 6))
+        ttk.Label(f, text="Preview: the items this category gives", style="Head.TLabel").grid(
+            row=3, column=0, columnspan=2, sticky="w", pady=(10, 2))
+        self.preview = ttk.Treeview(f, columns=("name",), show="headings", height=10)
+        self.preview.heading("name", text="Item", anchor="w")
+        self.preview.column("name", width=880, anchor="w")
+        self.preview.grid(row=4, column=0, columnspan=2, sticky="we")
+        self.empty_line = ttk.Label(f, text="", foreground=theme.PRIMARY, cursor="hand2")
+        self.empty_line.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.empty_line.bind("<Button-1>", lambda _: self.show_empty())
+        bottom = ttk.Frame(f)
+        bottom.grid(row=6, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(bottom, text="Apply now", style="Print.TButton", command=self.apply).pack(side="left")
+        ttk.Button(bottom, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        self.showing_empty = False
+        self.fill()
+        theme.dark_title_bar(dlg)
+
+    def fill(self):
+        counts, empty = categories.counts(self.screen.inventory, self.rules)
+        self.list.delete(*self.list.get_children())
+        for i, rule in enumerate(self.rules):
+            self.list.insert("", "end", iid=str(i), values=(rule["name"], len(counts.get(rule["name"], []))))
+        self.counts, self.empty = counts, empty
+        self.empty_line.config(text=f"{len(empty)} items have no category (click to see them)")
+        if self.selected is not None and self.selected < len(self.rules):
+            self.list.selection_set(str(self.selected))
+            self.show_rule()
+        self.show_preview()
+
+    def picked(self):
+        sel = self.list.selection()
+        if sel and int(sel[0]) != self.selected:
+            self.selected = int(sel[0])
+            self.showing_empty = False
+            self.show_rule()
+            self.show_preview()
+
+    def show_rule(self):
+        rule = self.rules[self.selected]
+        self._loading = True
+        self.name_var.set(rule["name"])
+        self.words_var.set(", ".join(rule.get("words", [])))
+        self.not_var.set(", ".join(rule.get("not", [])))
+        self._loading = False
+
+    def typed(self):
+        if getattr(self, "_loading", False) or self.selected is None or self.selected >= len(self.rules):
+            return
+        rule = self.rules[self.selected]
+        rule["name"] = self.name_var.get().strip() or rule["name"]
+        rule["words"] = categories.split_words(self.words_var.get())
+        rule["not"] = categories.split_words(self.not_var.get())
+        counts, empty = categories.counts(self.screen.inventory, self.rules)
+        self.counts, self.empty = counts, empty
+        if self.list.exists(str(self.selected)):
+            self.list.item(str(self.selected), values=(rule["name"], len(counts.get(rule["name"], []))))
+        self.empty_line.config(text=f"{len(empty)} items have no category (click to see them)")
+        self.show_preview()
+
+    def show_preview(self):
+        self.preview.delete(*self.preview.get_children())
+        if self.showing_empty:
+            items = self.empty
+        elif self.selected is not None and self.selected < len(self.rules):
+            items = self.counts.get(self.rules[self.selected]["name"], [])
+        else:
+            items = []
+        for it in sorted(items, key=lambda x: x["name"].lower())[:500]:
+            self.preview.insert("", "end", values=(it["name"],))
+
+    def show_empty(self):
+        self.showing_empty = True
+        self.show_preview()
+
+    def add(self):
+        self.rules.append({"name": f"New category {len(self.rules) + 1}", "words": [], "not": []})
+        self.selected = len(self.rules) - 1
+        self.fill()
+
+    def remove(self):
+        if self.selected is None or self.selected >= len(self.rules):
+            return
+        del self.rules[self.selected]
+        self.selected = min(self.selected, len(self.rules) - 1) if self.rules else None
+        self.fill()
+
+    def move(self, step):
+        i = self.selected
+        if i is None or not 0 <= i + step < len(self.rules):
+            return
+        self.rules[i], self.rules[i + step] = self.rules[i + step], self.rules[i]
+        self.selected = i + step
+        self.fill()
+
+    def apply(self):
+        """Apply now: the rules are kept, and every category not set by hand is filled again."""
+        categories.apply(self.screen.inventory, self.rules)
+        self.dlg.destroy()
+        self.screen.reload()
 
 
 class DisplayDialog:

@@ -174,8 +174,20 @@ class Inventory:
         return sorted({it.get("category") or "" for it in self.items} - {""}, key=str.lower)
 
     def low(self):
-        """Items under their minimum (the menu's red dot, "Order more")."""
+        """Items under their minimum ("Order more")."""
         return [it for it in self.items if it.get("minimum") is not None and it.get("stock", 0) < it["minimum"]]
+
+    def low_stock(self):
+        """Every item to order (2026-11-19_11): under its minimum ("Order more"), or Low: an item On display whose
+        storage can't fill the display once more (in storage < on display). Not the ones gone from Shopify."""
+        out = []
+        for it in self.items:
+            if it.get("gone"):
+                continue
+            under = it.get("minimum") is not None and it.get("stock", 0) < it["minimum"]
+            if under or is_low(it):
+                out.append(it)
+        return out
 
     def check(self, item, own_id=None):
         """Raises ValueError when the item can't be kept: no name, a name or barcode another item has."""
@@ -297,10 +309,17 @@ def qty_text(item, n=None):
     return " + ".join(parts) or plural(0, unit)
 
 
+def is_low(item):
+    """Low (2026-11-19_11): On display set and in storage under it (storage can't fill the display once more)."""
+    if item.get("display") is None or item.get("gone"):
+        return False
+    return max(0, item.get("stock", 0) - (item.get("shelf") or 0)) < item["display"]
+
+
 def low_any():
-    """For the menu's red dot."""
+    """For the menu's red dot: under a minimum, or Low."""
     try:
-        return bool(Inventory().low())
+        return bool(Inventory().low_stock())
     except Exception:
         return False
 
@@ -474,6 +493,8 @@ def plan_import(rows, columns, inventory):
         for key, value in (("category", cell("category")), ("unit", cell("unit"))):
             if value:
                 fields[key] = value
+        if fields.get("category"):
+            fields["category_hand"] = True  # a category from a list counts as set by hand (2026-11-19_11)
         if stock is not None:
             fields["stock"] = stock
         if minimum is not None:

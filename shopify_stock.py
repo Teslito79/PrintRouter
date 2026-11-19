@@ -65,7 +65,8 @@ def read_export(path):
         if not key.strip("|"):
             continue
         locations.add(str(row.get("Location") or "").strip())
-        item = out.setdefault(key, {"name": name_of(row), "sku": str(row.get("SKU") or "").strip(), "stock": 0})
+        item = out.setdefault(key, {"name": name_of(row), "title": str(row.get("Title") or "").strip(),
+                                    "sku": str(row.get("SKU") or "").strip(), "stock": 0})
         item["stock"] += _int(row.get("On hand (current)"))
     skus = {}
     for key, item in out.items():
@@ -221,6 +222,7 @@ def load(inventory, path, take_over=True, now=None):
             elif diff > 0:
                 came.append((row["name"], diff))
         item["name"] = row["name"]
+        item["shopify_title"] = row["title"]  # categories match the product's title (2026-11-19_11)
         item["shopify"] = True
         item["gone"] = False
         if row["barcode"] and row["barcode"] not in item.get("barcodes", []) \
@@ -236,6 +238,8 @@ def load(inventory, path, take_over=True, now=None):
         if key not in export and not item.get("gone"):
             item["gone"] = True
             gone.append(item["name"])
+    import categories
+    categories.apply(inventory, save=False)  # categories by name, except those set by hand (2026-11-19_11)
     since = last["time"] if last else None
     folder = routing.app_dir() / LOADS
     folder.mkdir(exist_ok=True)
