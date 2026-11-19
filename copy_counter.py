@@ -681,6 +681,11 @@ class Manager:
         wo.write_sales_line({"date": now()[:10], "order": "", "status": "copied", "items": c.short(),
                              "paid": f"{priced['due']:.2f}", "source": "copy counter", "copier": self.label(pid)})
         log_segments(self.rules, self.label(pid), c.data["segments"], c.papers_now())
+        try:  # Inventory (2026-11-19_03): the papers given at Finish and the extras
+            import inventory
+            inventory.take_copy_counter(c)
+        except Exception:
+            pass
         self.counters.pop(pid, None)
         self.save()
         copier_queue.release(pid)

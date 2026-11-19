@@ -71,3 +71,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    Add item. The box says "5 files: Add item makes 5 document items with these settings". Add item:
    there are 5 items, each named by its file with its own pages. Then main menu > Orders: each order
    is one line (number, customer, status, date) with Details...; Details... shows the items and files.
+15. Inventory with the shop's barcode scanner: Inventory management > Add item, give it a name, a
+   sale price (needs the Prices password) and 5 in stock, then scan the item's barcode into the
+   Barcodes box. OK. On the Inventory screen scan it again: it gets selected. Press Sell, scan it once:
+   it is in the basket with its price. Print receipt, then Done. Back in Inventory the stock is 4.

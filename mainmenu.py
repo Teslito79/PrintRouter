@@ -1,4 +1,5 @@
-"""The main menu ORCA opens on: Walk-in, Orders, PrintHub, Counter, Prices, Data, Settings (Tesla, 2026-11-15 to 18).
+"""The main menu ORCA opens on: Walk-in, Orders, PrintHub, Counter, Prices, Data, Inventory management, Settings
+(Tesla, 2026-11-15 to 19).
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X) comes back here;
 closing the menu closes ORCA. The menu starts what runs whatever shows: the ttk style, the website sync, the
@@ -14,6 +15,7 @@ import cleanup
 import copy_counter
 import costs
 import counter
+import inventory
 import jobs
 import printhub
 import routing
@@ -82,21 +84,25 @@ class MainMenu:
         for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("Orders", self.open_orders),
                                              ("PrintHub", self.open_printhub), ("Counter", self.open_counter),
                                              ("Prices", self.open_prices), ("Data", self.open_toners),
+                                             ("Inventory management", self.open_inventory),
                                              ("Settings", self.open_settings)),
                                             start=1):
-            button = ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command)
+            button = ttk.Button(f, text=text, style="Menu.TButton", width=20, command=command)
             button.grid(row=r, column=0, sticky="we", pady=6)
             if command == self.open_toners:  # by the command, so renaming the button keeps its dot
                 # A red dot while a spare toner count is at or below its minimum (toners.stock_low).
                 self.toner_dot = tk.Label(button, text="●", foreground=theme.ERROR, background=theme.BUTTON,
                                           font=("Segoe UI", 16), borderwidth=0)
+            if command == self.open_inventory:  # a red dot while an item is under its minimum (2026-11-19_03)
+                self.inventory_dot = tk.Label(button, text="●", foreground=theme.ERROR, background=theme.BUTTON,
+                                              font=("Segoe UI", 16), borderwidth=0)
         # 2026-11-18_02: a shop whose printers aren't installed here (the demo, a new shop) is told where to go.
         ttk.Style(win).configure("MenuWarn.TLabel", foreground=theme.WARN)
         self.printer_line = ttk.Label(f, text="", style="MenuWarn.TLabel", justify="center", wraplength=380)
-        self.printer_line.grid(row=8, column=0, pady=(18, 0))
+        self.printer_line.grid(row=9, column=0, pady=(18, 0))
         self.show_printer_line()
         self.sync_label = ttk.Label(f, text="", style="Hint.TLabel", justify="center", wraplength=380)
-        self.sync_label.grid(row=9, column=0, pady=(22, 0))
+        self.sync_label.grid(row=10, column=0, pady=(22, 0))
         theme.dark_title_bar(win)
         self.print_queue.parent = win
         self.show_sync()
@@ -145,6 +151,17 @@ class MainMenu:
     def open_toners(self):
         screen = toners.TonersScreen(self.root, self.rules, self.toners, on_back=self.show_menu)
         self.open_screen(screen.win)
+
+    def open_inventory(self):
+        """Inventory management (2026-11-19_03): items, barcodes, stock, Sell, Import."""
+        import inventory_screens
+        self.open_screen(inventory_screens.InventoryScreen(self, on_back=self.show_menu).win)
+
+    def show_inventory_dot(self):
+        if inventory.low_any():
+            self.inventory_dot.place(relx=1.0, x=-12, y=6, anchor="ne")
+        else:
+            self.inventory_dot.place_forget()
 
     def open_settings(self):
         """Settings (2026-11-18_02): behind the same password as Prices."""
@@ -201,6 +218,7 @@ class MainMenu:
             self.toner_dot.place(relx=1.0, x=-12, y=6, anchor="ne")
         else:
             self.toner_dot.place_forget()
+        self.show_inventory_dot()
         self.win.after(2000, self.show_sync)
 
     def queue_tick(self):

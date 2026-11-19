@@ -2723,6 +2723,12 @@ class OrdersScreen(OrderList):
                 "(only a line with no name stays in the sales list).") if order.get("keep_data") is False else ""
 
     def finish(self, order, cancelled):
+        if not cancelled:  # Inventory (2026-11-19_03): lamination, spiral, envelopes, label sheets at Collected
+            try:
+                import inventory
+                inventory.take_collected(order, rules=self.ctx.rules)
+            except Exception:
+                pass  # stock never stops anything
         try:
             wo.finish(order, cancelled)
         except OSError as e:

@@ -458,7 +458,14 @@ class Run:
             o = load(number)
             if o is None or pid not in (o.get("parts") or {}):
                 continue
-            o["parts"][pid]["state"] = "collected"
+            part = o["parts"][pid]
+            part["collected_times"] = part.get("collected_times", 0) + 1
+            try:  # Inventory (2026-11-19_03): the paper printed on this part, once per collection; never blocks
+                import inventory
+                inventory.take_for_part(o, pid, part, rules=self.rules)
+            except Exception:
+                pass
+            part["state"] = "collected"
             if all(part["state"] == "collected" for part in o["parts"].values()):
                 wo.set_status(o, "printed")
             else:

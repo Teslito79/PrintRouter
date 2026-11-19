@@ -50,3 +50,6 @@ copy_counter.json
 .copy_counter.json.tmp
 settings.json
 .settings.json.tmp
+inventory.json
+.inventory.json.tmp
+inventory_log.csv

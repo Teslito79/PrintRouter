@@ -729,10 +729,34 @@ class PrintHubView:
         order = self.busy_with(printer)
         if order is None:
             return
-        self.status_of(order)["parts"][printer]["state"] = "collected"
+        part = self.status_of(order)["parts"][printer]
+        part["collected_times"] = part.get("collected_times", 0) + 1
+        self.take_stock(order, printer, part)
+        part["state"] = "collected"
         self.save(order.number, f"pages collected from {printer}")
         self.start_next(printer)
         self.refresh()
+
+    def take_stock(self, order, printer, part):
+        """Inventory (2026-11-19_03): the paper of this part's items at Pages collected, once per collection: a
+        product's website paper and its Layout done sheets; a document's paper when the website named one. What
+        can't be known (no paper name) is skipped. Never blocks anything."""
+        try:
+            import inventory
+            state = self.status_of(order).setdefault("stock_taken", [])
+            docs = {d.name: d for d in order.documents}
+            for name in part.get("documents", []):
+                doc = docs.get(name)
+                if doc is None:
+                    continue
+                paper = doc.job.get("options", {}).get("Paper")
+                job = self.document_job(order, doc, printer)[1]
+                if job is None:
+                    continue
+                inventory.take_printhub(order.number, paper, job["paper"], job["sheets"],
+                                        f"{printer}:{name}:{part['collected_times']}", state)
+        except Exception:
+            pass
 
     def retry(self, printer):
         """Send again only what didn't go: the backs if they failed, otherwise what isn't sent yet."""
