@@ -414,30 +414,43 @@ class Screen:
 # ------------------------------------------------------------------ Walk-in
 
 class WalkinScreen(Screen):
-    """Three big buttons: Get Quote, Add Email, Print Jobs."""
+    """Six big buttons in three rows (2026-11-19_08): Get Quote, Add Email, Copy counter / Print Jobs, Orders /
+    Customers, left-aligned in the same columns."""
+
+    ROWS = ((("Get Quote", "open_quote_quote"), ("Add Email", "open_quote_email"), ("Copy counter", "open_copy_counter")),
+            (("Print Jobs", "open_print_jobs"), ("Orders", "open_orders")),
+            (("Customers", "open_customers"),))
+    HINTS = ("Get Quote: a customer at the counter (name and phone needed).   Add Email: an order that came by email.",
+             "Copy counter: count copies made at the copier.   Print Jobs: orders ready to print.",
+             "Orders: open orders, search, Collected.   Customers: spending and loyalty.")
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Walk-in", on_back, size="1160x720")
         self.warn = self.warnings(self.frame, 1)
         box = ttk.Frame(self.frame)
-        box.grid(row=2, column=0, pady=(40, 0))
-        for c, (text, command) in enumerate((("Get Quote", lambda: self.open_quote("quote")),
-                                             ("Add Email", lambda: self.open_quote("email")),
-                                             ("Print Jobs", self.open_print_jobs),
-                                             ("Customers", self.open_customers))):
-            ttk.Button(box, text=text, style="Walkin.TButton", width=11, command=command).grid(row=0, column=c, padx=12)
-        ttk.Label(self.frame, text="Get Quote: a customer at the counter (name and phone needed).   "
-                                   "Add Email: an order that came by email.   Print Jobs: orders ready to print.   "
-                                   "Customers: spending and loyalty.",
-                  style="Small.TLabel").grid(row=3, column=0, pady=(30, 0))
-        # Copy counter (2026-11-17_10): centred below the row of four, the same size and style.
-        self.counter_btn = ttk.Button(self.frame, text="Copy counter", style="Walkin.TButton", width=11,
-                                      command=self.open_copy_counter)
-        self.counter_btn.grid(row=4, column=0, pady=(30, 0))
-        ttk.Label(self.frame, text="Copy counter: count copies made at the copier", style="Small.TLabel").grid(
-            row=5, column=0, pady=(12, 0))
+        box.grid(row=2, column=0, pady=(30, 0))
+        self.buttons = {}
+        for r, row in enumerate(self.ROWS):
+            for c, (text, name) in enumerate(row):
+                b = ttk.Button(box, text=text, style="Walkin.TButton", width=11, command=getattr(self, name))
+                b.grid(row=r, column=c, padx=12, pady=10, sticky="w")
+                self.buttons[text] = b
+        self.counter_btn = self.buttons["Copy counter"]
+        ttk.Label(self.frame, text="\n".join(self.HINTS), style="Small.TLabel", justify="center").grid(
+            row=3, column=0, pady=(20, 0))
         self.ready()
         self.poll()
+
+    def open_quote_quote(self):
+        self.open_quote("quote")
+
+    def open_quote_email(self):
+        self.open_quote("email")
+
+    def open_orders(self):
+        """Orders (moved here from the main menu, 2026-11-19_08): Back returns to the Walk-in menu."""
+        self.win.withdraw()
+        OrdersScreen(self.ctx, on_back=self.show)
 
     def poll(self):
         if not self.win.winfo_exists():

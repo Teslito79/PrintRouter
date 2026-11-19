@@ -16,10 +16,10 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
 3. Both sides on heavy paper (Silk 300, Both sides): fronts, then Print backs on the copier's block,
    backs. Does each back land on its own front, the right way up?
 4. Counter, Today: the test prints show under Walk-in with #<number> (the cover sheet as one A4
-   B&W side). Then Orders: Ready for pickup, Collected; the folder is in Walk-in\Customers.
+   B&W side). Then Walk-in > Orders: Ready for pickup, Collected; the folder is in Walk-in\Customers.
 5. Walk-in layout: Get Quote with 50 A5 flyers, Place order. The flyer folder has W<n>-1.cdr and
    Options.txt. Drop the customer's design in (it shows as a customer file, 'Waiting for layout'),
-   lay it out in W<n>-1.cdr, export W<n>-1.pdf into the same folder, Orders > Layout done (25
+   lay it out in W<n>-1.cdr, export W<n>-1.pdf into the same folder, Walk-in > Orders > Details… > Layout done (25
    sheets suggested), then Print Jobs > Print now: only W<n>-1.pdf prints, at actual size.
 6. Queue: three test customers, two copiers. A: two B&W orders; B: a B&W order of 30 sheets; C: a B&W
    order of 2 sheets; and a colour order for A. Print Jobs > Start printing orders: the IM C4510 prints
@@ -69,7 +69,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    busy IM C4510). Press Check address on each copier and note what it says. Change nothing, Back.
 14. Many files and the Orders list: Add Email, Document, drop 5 PDFs at once on the box next to
    Add item. The box says "5 files: Add item makes 5 document items with these settings". Add item:
-   there are 5 items, each named by its file with its own pages. Then main menu > Orders: each order
+   there are 5 items, each named by its file with its own pages. Then Walk-in > Orders: each order
    is one line (number, customer, status, date) with Details...; Details... shows the items and files.
 15. Inventory with the shop's barcode scanner: Inventory management > Add item, give it a name, a
    sale price (needs the Prices password) and 5 in stock, then scan the item's barcode into the

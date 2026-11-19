@@ -1,5 +1,5 @@
-"""The main menu ORCA opens on: Walk-in, Orders, PrintHub, Counter, Prices, Data, Inventory management, Settings
-(Tesla, 2026-11-15 to 19).
+"""The main menu ORCA opens on: Walk-in, Inventory management, Data, PrintHub, Counter, Prices, Settings (Tesla,
+2026-11-15 to 19; the order since 2026-11-19_08). Orders is inside Walk-in.
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X) comes back here;
 closing the menu closes ORCA. The menu starts what runs whatever shows: the ttk style, the website sync, the
@@ -83,13 +83,13 @@ class MainMenu:
         f = ttk.Frame(win, padding=(48, 32))
         f.grid(sticky="nsew")
         ttk.Label(f, text="ORCA", style="Title.TLabel").grid(row=0, column=0, pady=(0, 24))
-        for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("Orders", self.open_orders),
-                                             ("PrintHub", self.open_printhub), ("Counter", self.open_counter),
-                                             ("Prices", self.open_prices), ("Data", self.open_toners),
+        for r, (text, command) in enumerate((("Walk-in", self.open_walkin),
                                              ("Inventory management", self.open_inventory),
+                                             ("Data", self.open_toners), ("PrintHub", self.open_printhub),
+                                             ("Counter", self.open_counter), ("Prices", self.open_prices),
                                              ("Settings", self.open_settings)),
                                             start=1):
-            button = ttk.Button(f, text=text, style="Menu.TButton", width=20, command=command)
+            button = ttk.Button(f, text=text, style="Menu.TButton", width=22, command=command)
             button.grid(row=r, column=0, sticky="we", pady=6)
             if command == self.open_toners:  # by the command, so renaming the button keeps its dot
                 # A red dot while a spare toner count is at or below its minimum (toners.stock_low).
@@ -132,6 +132,7 @@ class MainMenu:
         self.open_screen(walkin_screens.WalkinScreen(self, on_back=self.show_menu).win)
 
     def open_orders(self):
+        """The Orders screen on its own (it is opened from Walk-in since 2026-11-19_08; kept for other callers)."""
         self.open_screen(walkin_screens.OrdersScreen(self, on_back=self.show_menu).win)
 
     def open_printhub(self):
