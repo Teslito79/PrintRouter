@@ -20,7 +20,8 @@ def load_json(name):
 # rules.json is the shipped default (in git, never written by ORCA). The Settings page saves only what was changed on
 # this PC into settings.json next to it (local, gitignored), laid over rules.json by load_rules(), the one loader.
 SETTINGS = "settings.json"
-LOCAL_KEYS = ("printers", "rules", "fallback_printer", "receipt_printer", "walkin_paper_prices", "copy_counter")
+LOCAL_KEYS = ("printers", "rules", "fallback_printer", "receipt_printer", "walkin_paper_prices", "copy_counter",
+              "rotate_sort")
 COPY_COUNTER_KEYS = {"a3_counts_as": "copy_counter_a3_counts_as", "poll_seconds": "copy_counter_poll_seconds"}
 
 

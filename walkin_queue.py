@@ -497,15 +497,19 @@ class Run:
 
     def _send_worker(self):
         """Send the batches one after another; the copiers then print them at the same time."""
+        import itertools
         while True:
             pid, tasks = self.to_send.get()
             label = self.printers[pid]["label"]
+            # Rotate sort (2026-11-19_05): one tray rotation for the whole batch, so file after file and copy after
+            # copy lie crosswise on the one before.
+            trays = itertools.cycle((self.rules.get("rotate_sort") or {}).get("trays") or [walkin_print.TRAY])
             for n, (number, key, job, pdf, side) in enumerate(tasks, start=1):
                 self.results.put(("progress", pid, n, len(tasks), f"{job['file_name']} → {label}…"))
                 try:
                     work = walkin_print.WORK_DIR / f"send_{number}_{key}"
                     work.mkdir(parents=True, exist_ok=True)
-                    self.jobs.print_one(work, job, pdf, pdf, job["paper"], None, side=side)
+                    self.jobs.print_one(work, job, pdf, pdf, job["paper"], trays, side=side)
                 except Exception as e:
                     self.results.put(("failed", pid, f"{job['file_name']}: {e}"))
                     break

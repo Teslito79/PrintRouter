@@ -129,9 +129,28 @@ def settings_for(rules, item, prepared):
         s = {"color": {"bw": "bw", "color": "color", "mixed": "auto"}[item["color"]], "printer": "auto",
              "sides": "long" if item["sides"] == "double" else "single", "paper": item["size"],
              "per_side": str(item.get("per_side", 1)), "paper_type": paper_type_for(rules, item["paper"]),
-             "tray": TRAY, "copies": str(item["copies"]), "rotate": "0"}
+             "tray": TRAY, "copies": str(item["copies"]), "rotate": "1" if item.get("rotate") else "0"}
     s.update(item.get("print") or {})
     return s
+
+
+def rotate_reason(rules, item, installed=None):
+    """Why a Document item can't use Rotate sort (2026-11-19_05), in staff's words, or None. The rules of
+    jobs.rotate_problem: the rotate-sort copier set up on this PC, A4, plain paper, the default tray."""
+    rs = rules.get("rotate_sort") or {}
+    pid = rs.get("printer")
+    if pid not in rules.get("printers", {}) or len(rs.get("trays") or []) < 2:
+        return "Rotate sort isn't set up on this PC's printers"
+    if installed is not None and rules["printers"][pid].get("queue") not in installed:
+        return "Rotate sort isn't set up on this PC's printers"
+    if item.get("size", "A4") != "A4" or not routing.plain(rules, paper_type_for(rules, item.get("paper"))):
+        return "Rotate sort is for A4 plain paper only"
+    s = item.get("print") or {}
+    if s.get("tray") and s["tray"] != rules.get("defaults", {}).get("tray", TRAY):
+        return f"Rotate sort uses {' and '.join(rs['trays'])}: keep the tray on {rules['defaults']['tray']}"
+    if s.get("printer") not in (None, "auto", pid):
+        return f"Rotate sort only on {rules['printers'][pid].get('label', pid)}"
+    return None
 
 
 def job_for(shared_jobs, rules, item, prepared, printer=None, busy=None):

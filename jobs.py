@@ -228,7 +228,7 @@ class Jobs:
                               if job["color"] else "document")
             printer_id, reason = routing.choose_printer(self.rules, job,
                                                         self.busy() if busy is None else busy, self.missing())
-            if job["rotate"]:
+            if job["rotate"] and self.rules["rotate_sort"].get("printer") in self.printers:
                 printer_id, reason = self.rules["rotate_sort"]["printer"], "Rotate sort"
         else:
             job["content"] = ""

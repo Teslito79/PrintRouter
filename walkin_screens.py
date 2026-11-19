@@ -1403,6 +1403,17 @@ class QuoteScreen(Screen):
             ttk.Entry(lam, textvariable=v["lam_sheets"], width=6, font=FONT).pack(side="left", padx=(6, 0))
             row += 1
             v["cuts"] = entry("Cuts (how many)", d.get("cuts", 0))
+            # Rotate sort (2026-11-19_05): each set lies crosswise on the one before (A4 plain paper, one copier).
+            v["rotate"] = tk.BooleanVar(value=bool(d.get("rotate")))
+            self.rotate_box = ttk.Checkbutton(self.options, text="Rotate sort", variable=v["rotate"])
+            self.rotate_box.grid(row=row, column=0, sticky="w", pady=2)
+            self.rotate_why = ttk.Label(self.options, text="", style="Hint.TLabel", wraplength=300, justify="left")
+            self.rotate_why.grid(row=row, column=1, sticky="w", pady=2)
+            row += 1
+            for key in ("size", "paper"):
+                v[key].trace_add("write", lambda *_: self.check_rotate())
+            self.rotate_item = item
+            self.check_rotate()
         else:
             p = next(p for p in cat.PRODUCTS if p["name"] == self.what.get())
             picks = item["picks"] if item else cat.default_picks(p)
@@ -1483,6 +1494,31 @@ class QuoteScreen(Screen):
                     for w in (name, x):
                         w.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"), add="+")
         self.show_multi()
+
+    def rotate_reason(self, item):
+        import routing
+        installed = routing.installed_printers()
+        return walkin_print.rotate_reason(self.ctx.rules, dict(item, print=(getattr(self, "rotate_item", None) or {})
+                                                                 .get("print")), installed)
+
+    def check_rotate(self):
+        """Grey the Rotate sort tick with the reason when it can't be used; a tick that no longer fits (size or paper
+        changed) is taken off, saying why."""
+        v = self.option_vars
+        box = getattr(self, "rotate_box", None)
+        if box is None or "rotate" not in v:
+            return
+        try:
+            why = self.rotate_reason({"size": v["size"].get(), "paper": v["paper"].get()})
+            if why:
+                if v["rotate"].get():
+                    v["rotate"].set(False)
+                box.state(["disabled"])
+            else:
+                box.state(["!disabled"])
+            self.rotate_why.config(text=why or "")
+        except tk.TclError:
+            pass
 
     def show_multi(self):
         """Several files: Pages says "from each file" and can't be typed, and colour is B&W or Colour only."""
@@ -1637,6 +1673,8 @@ class QuoteScreen(Screen):
                     "per_side": int(v["per_side"].get()), "paper": v["paper"].get(),
                     "finish": FINISH_CHOICES[v["finish"].get()], "lam": bool(v["lam"].get()),
                     "lam_sheets": whole("lam_sheets", "Sheets to laminate", 0), "cuts": whole("cuts", "Cuts", 0)}
+            if v.get("rotate") is not None and v["rotate"].get() and not self.rotate_reason(item):
+                item["rotate"] = True
             if item["color"] == "mixed" and not walkin_pricing.page_set(item["color_pages"], item["pages"]):
                 raise ValueError("Colour pages: say which pages are in colour (e.g. 1, 3-5).")
             if item["copies"] > 999:

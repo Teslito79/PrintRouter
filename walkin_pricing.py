@@ -80,6 +80,8 @@ def describe(item):
             parts.append(f"laminated ({item['lam_sheets']} sheets)" if item.get("lam_sheets") else "laminated")
         if item.get("cuts"):
             parts.append(f"{item['cuts']} cuts")
+        if item.get("rotate"):
+            parts.append("Rotate sort")
         text = ", ".join(parts)
     else:
         p = product_of(item)

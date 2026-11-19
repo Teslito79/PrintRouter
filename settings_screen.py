@@ -104,6 +104,7 @@ class SettingsScreen(Screen):
         self.fallback = rules.get("fallback_printer")
         self.receipt = rules.get("receipt_printer") or None
         self.prices_on = tk.BooleanVar(value=rules.get("walkin_paper_prices") is True)
+        self.rotate = copy.deepcopy(rules.get("rotate_sort") or {})  # 2026-11-19_05
         self.a3 = tk.StringVar(value=str(rules.get("copy_counter_a3_counts_as", 2)))
         self.poll = tk.StringVar(value=str(rules.get("copy_counter_poll_seconds", 5)))
         self.checks = {}  # printer -> Check address result
@@ -176,6 +177,7 @@ class SettingsScreen(Screen):
         self.fill_routing(self.section(1, "Which printer does what"))
         self.fill_receipt(self.section(2, "Receipt printer"))
         self.fill_walkin(self.section(3, "Walk-in"))
+        self.fill_rotate(self.section(4, "Rotate sort"))
         for box in self.scroll.inner.winfo_children():
             theme.on_surface(box)
         self.win.update_idletasks()
@@ -431,6 +433,57 @@ class SettingsScreen(Screen):
         ttk.Entry(g, textvariable=self.poll, width=6, font=FONT).pack(side="left")
         ttk.Label(g, text="seconds").pack(side="left", padx=(6, 0))
 
+    def fill_rotate(self, box):
+        """Rotate sort (2026-11-19_05): the copier and its two trays (A4 portrait / A4 landscape), or Off."""
+        ttk.Label(box, text="Each copy, or each file, comes out crosswise on the one before (A4 plain paper), so sets "
+                            "are easy to take apart and staple.", style="Hint.TLabel", wraplength=1000,
+                  justify="left").grid(row=0, column=0, columnspan=4, sticky="w")
+        names = {self.label(pid): pid for pid in self.printers}
+        pid = self.rotate.get("printer") if self.rotate.get("printer") in self.printers else None
+        pvar = tk.StringVar(value=self.label(pid) if pid else "Off")
+        ttk.Label(box, text="Printer:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        cb = ttk.Combobox(box, textvariable=pvar, values=["Off"] + list(names), state="readonly", width=24, font=FONT)
+        cb.grid(row=1, column=1, sticky="w", pady=(6, 0), padx=(6, 0))
+
+        def picked(_):
+            new = names.get(pvar.get())
+            self.rotate["printer"] = new
+            if new and new != pid:
+                trays = self.trays_of(new)
+                self.rotate["trays"] = [t for t in ("Tray 1", "Tray 4") if t in trays] or trays[:2]
+            self.changed()
+            self.fill()
+
+        cb.bind("<<ComboboxSelected>>", picked)
+        if not pid:
+            ttk.Label(box, text="Off: the Rotate sort tick is greyed out in Get Quote and Add Email.",
+                      style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+            return
+        trays = self.trays_of(pid)
+        current = list(self.rotate.get("trays") or []) + ["", ""]
+        for k, text in enumerate(("Tray for A4 portrait:", "Tray for A4 landscape:")):
+            ttk.Label(box, text=text).grid(row=2 + k, column=0, sticky="w", pady=3)
+            tvar = tk.StringVar(value=current[k])
+            tb = ttk.Combobox(box, textvariable=tvar, values=trays, state="readonly", width=24, font=FONT)
+            tb.grid(row=2 + k, column=1, sticky="w", padx=(6, 0), pady=3)
+
+            def tray_picked(_e, i=k, v=tvar):
+                t = list(self.rotate.get("trays") or []) + ["", ""]
+                t[i] = v.get()
+                self.rotate["trays"] = t[:2]
+                self.changed()
+
+            tb.bind("<<ComboboxSelected>>", tray_picked)
+
+    def trays_of(self, pid):
+        """The printer's own trays (read from its driver, read only), else ORCA's tray names."""
+        import driverprint
+        try:
+            found = list(driverprint.capabilities(self.printers[pid].get("queue"))["features"].get("JobInputBin", {}))
+        except Exception:
+            found = []
+        return found or list(self.ctx.rules.get("trays", []))
+
     def open_price_list(self, path):
         try:
             os.startfile(path)  # the default program (Excel); ORCA itself never writes it
@@ -457,6 +510,12 @@ class SettingsScreen(Screen):
             rules["rules"] = copy.deepcopy(self.custom_rules)
             rules["fallback_printer"] = self.fallback if self.fallback in self.printers else next(iter(self.printers))
         rules["receipt_printer"] = self.receipt
+        rotate = dict(self.rotate)
+        if rotate.get("printer") not in self.printers:
+            rotate["printer"] = None  # Off
+        elif len([t for t in rotate.get("trays") or [] if t]) < 2 or rotate["trays"][0] == rotate["trays"][1]:
+            raise ValueError("Rotate sort: pick two different trays (A4 portrait and A4 landscape), or set it Off.")
+        rules["rotate_sort"] = rotate
         rules["walkin_paper_prices"] = bool(self.prices_on.get())
         for var, key, what in ((self.a3, "copy_counter_a3_counts_as", "One A3 copy adds to the total counter"),
                                (self.poll, "copy_counter_poll_seconds", "Read every … seconds")):

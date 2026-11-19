@@ -75,3 +75,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    sale price (needs the Prices password) and 5 in stock, then scan the item's barcode into the
    Barcodes box. OK. On the Inventory screen scan it again: it gets selected. Press Sell, scan it once:
    it is in the basket with its price. Print receipt, then Done. Back in Inventory the stock is 4.
+16. Rotate sort (its first paper test): Add Email, Document, A4, Normal 80 gsm, 1 copy, tick Rotate
+   sort, drop 4 one-page A4 PDFs at once, Add item, place the order and print it. The 4 sheets come out
+   of the IM C4510 crosswise one after another (Tray 1, Tray 4, Tray 1, Tray 4). Then one PDF with 3
+   copies and Rotate sort: 3 sheets, crosswise.
