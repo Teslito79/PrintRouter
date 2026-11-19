@@ -53,3 +53,4 @@ settings.json
 inventory.json
 .inventory.json.tmp
 inventory_log.csv
+inventory_loads/

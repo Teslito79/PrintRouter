@@ -396,8 +396,9 @@ HEADINGS = {
     "stock": ("stock", "in stock", "qty", "quantity", "on hand", "απόθεμα", "αποθεμα", "ποσότητα", "ποσοτητα"),
     "minimum": ("minimum", "min", "reorder", "ελάχιστο", "ελαχιστο"),
     "price": ("price", "sale price", "retail", "τιμή", "τιμη", "τιμή πώλησης", "τιμη πωλησης"),
+    "display": ("on display", "display", "shelf", "βιτρίνα", "βιτρινα", "ράφι", "ραφι"),
 }
-FIELDS = ("name", "barcode", "category", "unit", "stock", "minimum", "price")
+FIELDS = ("name", "barcode", "category", "unit", "stock", "minimum", "price", "display")
 
 
 def read_table(path):
@@ -458,6 +459,7 @@ def plan_import(rows, columns, inventory):
             stock = number(cell("stock"), "In stock")
             minimum = number(cell("minimum"), "Minimum", low=0)
             price = number(cell("price"), "Sale price", whole=False, low=0)
+            display = number(cell("display"), "On display", low=0)
             if code:
                 if code in seen_codes:
                     raise ValueError(f"barcode {code} is used twice (row {seen_codes[code]})")
@@ -478,6 +480,8 @@ def plan_import(rows, columns, inventory):
             fields["minimum"] = minimum
         if price is not None:
             fields["price"] = price
+        if display is not None:
+            fields["display"] = display  # 2026-11-19_09: set through shopify_stock.set_display (logged)
         if found:
             if code and code not in found.get("barcodes", []):
                 fields["barcodes"] = found.get("barcodes", []) + [code]
@@ -495,16 +499,20 @@ def plan_import(rows, columns, inventory):
 
 def do_import(inventory, new, update, with_prices=True, with_updates=True):
     """Apply a planned import; every change logged with the reason import. Prices only with the password."""
+    import shopify_stock
     added = changed = 0
     for fields in new:
         fields = dict(fields)
         if not with_prices:
             fields.pop("price", None)
+        display = fields.pop("display", None)
         try:
-            inventory.add(dict(fields, unit=fields.get("unit") or "piece"), reason="import")
+            item = inventory.add(dict(fields, unit=fields.get("unit") or "piece"), reason="import")
             added += 1
         except ValueError:
             continue
+        if display is not None:
+            shopify_stock.set_display(inventory, item["id"], display)
     if with_updates:
         for item_id, fields in update:
             fields = dict(fields, _reason="import")
@@ -514,6 +522,9 @@ def do_import(inventory, new, update, with_prices=True, with_updates=True):
             if item is None:
                 continue
             stock = fields.pop("stock", None)
+            display = fields.pop("display", None)
+            if display is not None:
+                shopify_stock.set_display(inventory, item_id, display)
             try:
                 inventory.edit(item_id, {k: v for k, v in fields.items() if k != "_reason"})
             except ValueError:

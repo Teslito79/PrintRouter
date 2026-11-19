@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import costs
 import inventory as inv
+import shopify_stock as shop
 import theme
 import walkin_prices
 import walkin_pricing as P
@@ -58,9 +59,10 @@ def ask_password(parent):
 # ------------------------------------------------------------------ the Inventory screen
 
 class InventoryScreen(Screen):
-    COLUMNS = (("name", "Name", 260), ("category", "Category", 140), ("barcode", "Barcode", 150),
-               ("stock", "In stock", 190), ("minimum", "Minimum", 140), ("price", "Sale price", 100),
-               ("status", "Status", 150))
+    COLUMNS = (("name", "Name", 250), ("category", "Category", 120), ("barcode", "Barcode", 130),
+               ("stock", "In stock", 125), ("minimum", "Minimum", 85), ("price", "Sale price", 90),
+               ("display", "On display", 85), ("shelf", "On shelf", 75), ("storage", "In storage", 85),
+               ("status", "Status", 200))
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Inventory management", on_back, size="1300x880")
@@ -92,6 +94,7 @@ class InventoryScreen(Screen):
             self.tree.heading(key, text=text, anchor="w", command=lambda k=key: self.sort(k))
             self.tree.column(key, width=width, anchor="w")
         self.tree.tag_configure("low", foreground=theme.ERROR)
+        self.tree.tag_configure("gone", foreground=theme.MUTED)
         self.tree.grid(row=0, column=0, sticky="nsew")
         bar = ttk.Scrollbar(box, orient="vertical", command=self.tree.yview)
         bar.grid(row=0, column=1, sticky="ns")
@@ -100,15 +103,27 @@ class InventoryScreen(Screen):
         row = ttk.Frame(f)
         row.grid(row=3, column=0, sticky="we", pady=(10, 0))
         for text, command in (("Delivery…", self.delivery), ("Used / broken…", self.used), ("Count…", self.count),
-                              ("History…", self.history), ("Edit…", self.edit), ("Remove", self.remove)):
+                              ("On display…", self.on_display), ("History…", self.history), ("Edit…", self.edit),
+                              ("Remove", self.remove)):
             ttk.Button(row, text=text, command=command).pack(side="left", padx=(0, 8))
-        right = ttk.Frame(row)
+        self.message = ttk.Label(f, text="", style="Small.TLabel")
+        self.message.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        # 2026-11-19_09: Shopify's stock at the end of the day, and what to bring from storage to the shelves; the
+        # list buttons and Sell on the same row, right (two rows fit a 1366 screen)
+        day = ttk.Frame(f)
+        day.grid(row=5, column=0, sticky="we", pady=(6, 0))
+        right = ttk.Frame(day)
         right.pack(side="right")
         for text, command, style in (("Add item…", self.add, None), ("Import list…", self.import_list, None),
                                      ("Export list…", self.export, None), ("Sell", self.sell, "Print.TButton")):
             ttk.Button(right, text=text, command=command, style=style or "TButton").pack(side="left", padx=(8, 0))
-        self.message = ttk.Label(f, text="", style="Small.TLabel")
-        self.message.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Button(day, text="End of day: load Shopify stock…", command=self.load_shopify).pack(side="left")
+        ttk.Button(day, text="Restock", command=self.restock).pack(side="left", padx=(8, 0))
+        self.restock_line = ttk.Label(day, text="", style="Warn.TLabel")
+        self.restock_line.pack(side="left", padx=(16, 0))
+        ttk.Label(f, text="Shopify items: the next end-of-day load replaces ORCA's own stock changes for them "
+                          "(Delivery, Count, Sell); Shopify's number wins.", style="Small.TLabel").grid(
+            row=6, column=0, sticky="w", pady=(4, 0))
         self.scan = ScanCatcher(self.win, self.scanned)
         self.fill()
         self.ready()
@@ -130,7 +145,10 @@ class InventoryScreen(Screen):
                "barcode": lambda it: ",".join(it.get("barcodes", [])), "stock": lambda it: it.get("stock", 0),
                "minimum": lambda it: it.get("minimum") if it.get("minimum") is not None else -1,
                "price": lambda it: it.get("price") if it.get("price") is not None else -1,
-               "status": lambda it: self.status(it)}[self.sort_key]
+               "status": lambda it: self.status(it),
+               "display": lambda it: it.get("display") if it.get("display") is not None else -1,
+               "shelf": lambda it: it.get("shelf") if it.get("shelf") is not None else -1,
+               "storage": lambda it: shop.storage(it)}[self.sort_key]
         return sorted(out, key=key, reverse=self.sort_rev)
 
     def sort(self, key):
@@ -140,6 +158,8 @@ class InventoryScreen(Screen):
 
     @staticmethod
     def status(it):
+        if it.get("gone"):
+            return "Not in Shopify any more"
         if it.get("stock", 0) < 0:
             return "Count it"
         if it.get("minimum") is not None and it.get("stock", 0) < it["minimum"]:
@@ -153,15 +173,24 @@ class InventoryScreen(Screen):
         self.category_box.config(values=["All"] + cats)
         for it in self.visible():
             status = self.status(it)
+            shown = it.get("display") is not None
             values = (it["name"], it.get("category") or "", ", ".join(it.get("barcodes", [])), inv.qty_text(it),
                       inv.qty_text(it, it["minimum"]) if it.get("minimum") is not None else "",
-                      euro(it["price"]) if it.get("price") is not None else "not for sale", status)
-            self.tree.insert("", "end", iid=it["id"], values=values, tags=("low",) if status else ())
+                      euro(it["price"]) if it.get("price") is not None else "not for sale",
+                      it["display"] if shown else "", (it.get("shelf") or 0) if shown else "",
+                      shop.storage(it) if shown else "", status)
+            tag = ("gone",) if it.get("gone") else ("low",) if status else ()
+            self.tree.insert("", "end", iid=it["id"], values=values, tags=tag)
         if keep and self.tree.exists(keep):
             self.tree.selection_set(keep)
             self.tree.see(keep)
         low = len(self.inventory.low())
         self.totals.config(text=f"{len(self.inventory.items)} items   ·   {low} to order")
+        n = len(shop.restock_lines(self.inventory))
+        try:
+            self.restock_line.config(text=f"Restock: {n} item{'' if n == 1 else 's'}" if n else "")
+        except AttributeError:
+            pass
 
     def selected(self):
         sel = self.tree.selection()
@@ -230,6 +259,48 @@ class InventoryScreen(Screen):
         if item:
             QtyDialog(self, item, "count")
 
+    def on_display(self):
+        item = self.selected()
+        if item:
+            DisplayDialog(self, item)
+
+    def restock(self):
+        RestockWindow(self)
+
+    def load_shopify(self, path=None):
+        """End of day: load Shopify stock (a CSV exported from Shopify), then show Sold / Came in and the restock
+        list."""
+        path = path or filedialog.askopenfilename(parent=self.win, title="Load Shopify stock",
+                                                  filetypes=[("Shopify inventory export", "*.csv"), ("All files", "*.*")])
+        if not path:
+            return None
+        older = shop.older_than_last(self.inventory, path)
+        if older and not messagebox.askyesno(parent=self.win, title="Inventory",
+                                             message=f"This file is older than the last one loaded ({older}). "
+                                                     f"Load it anyway?"):
+            return None
+        take_over = True
+        if shop.last_load(self.inventory) is None:
+            try:
+                export, _ = shop.read_export(path)
+            except (OSError, ValueError) as e:
+                messagebox.showwarning(parent=self.win, title="Inventory", message=str(e))
+                return None
+            matches = shop.matches_for_first_load(self.inventory, export)
+            if matches:
+                take_over = messagebox.askyesno(
+                    parent=self.win, title="Inventory",
+                    message=f"{len(matches)} items already in Inventory match Shopify products (by barcode or name). "
+                            f"Join them, so they follow Shopify's stock from now on?")
+        try:
+            result = shop.load(self.inventory, path, take_over=take_over)
+        except (OSError, ValueError) as e:
+            messagebox.showwarning(parent=self.win, title="Inventory", message=str(e))
+            return None
+        self.reload()
+        LoadReport(self, result)
+        return result
+
     def history(self):
         item = self.selected()
         if item:
@@ -296,7 +367,8 @@ class ItemDialog:
                      "minimum": tk.StringVar(value="" if it.get("minimum") is None else str(it["minimum"])),
                      "price": tk.StringVar(value="" if it.get("price") is None else f"{it['price']:.2f}"),
                      "link": tk.StringVar(value=inv.link_text(it.get("link")) or "None"),
-                     "notes": tk.StringVar(value=it.get("notes", ""))}
+                     "notes": tk.StringVar(value=it.get("notes", "")),
+                     "display": tk.StringVar(value="" if it.get("display") is None else str(it["display"]))}
         self.price_before = it.get("price")
         rows = (("Name *", "name", ttk.Entry, {"width": 32}),
                 ("Category", "category", ttk.Combobox, {"values": screen.inventory.categories(), "width": 30}),
@@ -308,7 +380,8 @@ class ItemDialog:
                 ("Sale price EUR (empty: not for sale)", "price", ttk.Entry, {"width": 10}),
                 ("Goes down by itself with", "link", ttk.Combobox, {"values": link_texts, "width": 40,
                                                                     "state": "readonly"}),
-                ("Notes", "notes", ttk.Entry, {"width": 40}))
+                ("Notes", "notes", ttk.Entry, {"width": 40}),
+                ("On display (empty: not restocked daily)", "display", ttk.Entry, {"width": 8}))
         for r, (label, key, cls, opts) in enumerate(rows):
             ttk.Label(f, text=label + ":").grid(row=r, column=0, sticky="w", pady=3, padx=(0, 10))
             w = cls(f, textvariable=self.vars[key], font=FONT, **opts)
@@ -345,6 +418,7 @@ class ItemDialog:
         price = inv.number(v["price"], "Sale price", whole=False, low=0)
         if price != self.price_before and not self.screen.prices_open:
             raise ValueError("Sale price: needs the Prices password (Unlock sale price…).")
+        self.display = inv.number(v["display"], "On display", low=0)
         return {"name": v["name"].strip(), "category": v["category"].strip(), "barcodes": codes,
                 "unit": v["unit"].strip() or "piece", "per_unit": inv.number(v["per_unit"], "Pieces in one unit", low=1) or 1,
                 "stock": inv.number(v["stock"], "In stock") or 0,
@@ -360,6 +434,7 @@ class ItemDialog:
                 item_id = self.item_id
             else:
                 item_id = self.screen.inventory.add(values)["id"]
+            shop.set_display(self.screen.inventory, item_id, self.display)  # logged when it changes
         except ValueError as e:
             self.error.config(text=str(e))
             return
@@ -465,6 +540,233 @@ class HistoryDialog:
         tree.grid(row=0, column=0, sticky="nsew")
         ttk.Button(f, text="Close", command=dlg.destroy).grid(row=1, column=0, sticky="e", pady=(10, 0))
         theme.dark_title_bar(dlg)
+
+
+# ------------------------------------------------------------------ Shopify, On display, Restock (2026-11-19_09)
+
+def a4_pdf(path, title, lines):
+    """A plain A4 PDF: the title and the lines (no money, no shop name, no ORCA, no PrintHub)."""
+    from PIL import Image, ImageDraw
+    import receipt
+    big, small = receipt._font(46, True), receipt._font(30)
+    pages, page, y = [], None, 0
+    for k, line in enumerate([None] + list(lines)):
+        if page is None or y > 1680:
+            page = Image.new("L", (1240, 1754), 255)
+            pages.append(page)
+            y = 100
+        d = ImageDraw.Draw(page)
+        if line is None:
+            d.text((90, y), title, font=big, fill=0)
+            y += 90
+            continue
+        d.text((90, y), line, font=small, fill=0)
+        y += 44
+    pages[0].save(path, "PDF", resolution=150, save_all=True, append_images=pages[1:])
+    return path
+
+
+def print_lines(ctx, header, lines, path):
+    """The XP-80C, as the copy counter's receipt: the date and the lines only."""
+    import printing
+    import receipt
+    receipt.lines_pdf(path, header, [(line, "") for line in lines], None)
+    printing.send(path, ctx.rules["receipt_printer"])
+    return path
+
+
+class DisplayDialog:
+    """On display… for the selected item (scan it first): the number shown on the shelf, empty = not restocked."""
+
+    def __init__(self, screen, item):
+        self.screen, self.item = screen, item
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("On display")
+        dlg.resizable(False, False)
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=20)
+        f.grid()
+        ttk.Label(f, text=item["name"], style="Head.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(f, text="On display (empty: not restocked daily):").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.var = tk.StringVar(value="" if item.get("display") is None else str(item["display"]))
+        e = ttk.Entry(f, textvariable=self.var, width=8, font=FONT)
+        e.grid(row=1, column=1, sticky="w", padx=6, pady=(8, 0))
+        e.focus_set()
+        self.error = ttk.Label(f, text="", style="Bad.TLabel")
+        self.error.grid(row=2, column=0, columnspan=2, sticky="w")
+        b = ttk.Frame(f)
+        b.grid(row=3, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        ttk.Button(b, text="OK", style="Print.TButton", command=self.done).pack(side="left")
+        ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        dlg.bind("<Return>", lambda _: self.done())
+        theme.dark_title_bar(dlg)
+        dlg.grab_set()
+
+    def done(self):
+        try:
+            amount = inv.number(self.var.get(), "On display", low=0)
+        except ValueError as e:
+            self.error.config(text=str(e))
+            return
+        shop.set_display(self.screen.inventory, self.item["id"], amount)
+        self.dlg.destroy()
+        self.screen.reload(select=self.item["id"])
+
+
+class LoadReport:
+    """After a load: "Since 18 Nov 19:02", Sold and Came in (sortable), new and gone items; Print / Save PDF; then the
+    restock list."""
+
+    def __init__(self, screen, result):
+        self.screen, self.result = screen, result
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("End of day: Shopify stock")
+        dlg.transient(screen.win)
+        f = ttk.Frame(dlg, padding=16)
+        f.grid(sticky="nsew")
+        dlg.columnconfigure(0, weight=1)
+        dlg.rowconfigure(0, weight=1)
+        ttk.Label(f, text=shop.since_text(result), style="Big.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        extra = f"{result['items']} products loaded"
+        if result["new"]:
+            extra += f"   ·   new in Shopify: {len(result['new'])}"
+        if result["gone"]:
+            extra += f"   ·   not in Shopify any more: {len(result['gone'])}"
+        if result["locations"] > 1:
+            extra += f"   ·   stock added up over {result['locations']} locations"
+        ttk.Label(f, text=extra, style="Small.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 8))
+        self.trees = {}
+        for c, (key, title) in enumerate((("sold", "Sold"), ("came", "Came in"))):
+            ttk.Label(f, text=f"{title} ({len(result[key])})", style="Head.TLabel").grid(row=2, column=c, sticky="w")
+            tree = ttk.Treeview(f, columns=("name", "n"), show="headings", height=16)
+            tree.heading("name", text="Item", anchor="w", command=lambda k=key: self.sort(k, 0))
+            tree.heading("n", text="How many", anchor="w", command=lambda k=key: self.sort(k, 1))
+            tree.column("name", width=360, anchor="w")
+            tree.column("n", width=90, anchor="w")
+            tree.grid(row=3, column=c, sticky="nsew", padx=(0, 12))
+            self.trees[key] = tree
+            self.rows = getattr(self, "rows", {})
+            self.rows[key] = list(result[key])
+            self.fill(key)
+        f.rowconfigure(3, weight=1)
+        b = ttk.Frame(f)
+        b.grid(row=4, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        if screen.ctx.rules.get("receipt_printer"):
+            ttk.Button(b, text="Print", command=self.print_receipt).pack(side="left")
+        ttk.Button(b, text="Save PDF…", command=self.save_pdf).pack(side="left", padx=(8, 0))
+        ttk.Button(b, text="Restock list", command=lambda: RestockWindow(screen)).pack(side="left", padx=(8, 0))
+        ttk.Button(b, text="Close", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        theme.dark_title_bar(dlg)
+        if shop.restock_lines(screen.inventory):
+            dlg.after(200, lambda: RestockWindow(screen))
+
+    def sort(self, key, col):
+        rev = getattr(self, "_rev", {}).get((key, col), False)
+        self.rows[key].sort(key=lambda r: (r[col].lower() if col == 0 else r[col]), reverse=rev)
+        self._rev = dict(getattr(self, "_rev", {}), **{(key, col): not rev})
+        self.fill(key)
+
+    def fill(self, key):
+        tree = self.trees[key]
+        tree.delete(*tree.get_children())
+        for name, n in self.rows[key]:
+            tree.insert("", "end", values=(name, n))
+
+    def lines(self):
+        out = [shop.since_text(self.result), "", f"Sold ({len(self.rows['sold'])})"]
+        out += [f"  {name}: {n}" for name, n in self.rows["sold"]] or ["  nothing"]
+        out += ["", f"Came in ({len(self.rows['came'])})"]
+        out += [f"  {name}: {n}" for name, n in self.rows["came"]] or ["  nothing"]
+        return out
+
+    def print_receipt(self, path=None):
+        import walkin_print
+        path = path or walkin_print.WORK_DIR / "shopify_report.pdf"
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        return print_lines(self.screen.ctx, [datetime.datetime.now().strftime("%d/%m/%Y  %H:%M")], self.lines(), path)
+
+    def save_pdf(self, path=None):
+        path = path or filedialog.asksaveasfilename(parent=self.dlg, title="Save PDF", defaultextension=".pdf",
+                                                    initialfile=f"Sold {datetime.date.today()}.pdf",
+                                                    filetypes=[("PDF", "*.pdf")])
+        if path:
+            a4_pdf(path, f"End of day {datetime.datetime.now():%d/%m/%Y %H:%M}", self.lines())
+        return path
+
+
+class RestockWindow:
+    """What to bring from storage to the shelves: one line per item, Restocked per line, All restocked; Print on the
+    XP-80C or Save an A4 PDF (the date and the lines only)."""
+
+    def __init__(self, screen):
+        self.screen = screen
+        self.dlg = dlg = tk.Toplevel(screen.win)
+        dlg.title("Restock")
+        dlg.transient(screen.win)
+        self.body = ttk.Frame(dlg, padding=16)
+        self.body.grid(sticky="nsew")
+        theme.dark_title_bar(dlg)
+        self.fill()
+
+    def fill(self):
+        for w in self.body.winfo_children():
+            w.destroy()
+        lines = shop.restock_lines(self.screen.inventory)
+        ttk.Label(self.body, text=f"Restock ({len(lines)})", style="Big.TLabel").grid(row=0, column=0, sticky="w")
+        if not lines:
+            ttk.Label(self.body, text="Every shelf is full.", style="Hint.TLabel").grid(row=1, column=0, sticky="w")
+        cat = None
+        r = 1
+        for it, bring, kind, text in lines:
+            if (it.get("category") or "") != cat:
+                cat = it.get("category") or ""
+                ttk.Label(self.body, text=cat or "No category", style="Head.TLabel").grid(row=r, column=0, sticky="w",
+                                                                                            pady=(8, 0))
+                r += 1
+            style = {"ok": "TLabel", "short": "Warn.TLabel", "order": "Bad.TLabel"}[kind]
+            ttk.Label(self.body, text=text, style=style).grid(row=r, column=0, sticky="w", padx=(12, 12))
+            if bring > 0:
+                ttk.Button(self.body, text="Restocked", command=lambda i=it["id"]: self.done(i)).grid(
+                    row=r, column=1, sticky="w", pady=1)
+            r += 1
+        b = ttk.Frame(self.body)
+        b.grid(row=r, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        if lines:
+            ttk.Button(b, text="All restocked", style="Print.TButton", command=self.all_done).pack(side="left")
+            if self.screen.ctx.rules.get("receipt_printer"):
+                ttk.Button(b, text="Print", command=self.print_receipt).pack(side="left", padx=(8, 0))
+            ttk.Button(b, text="Save PDF…", command=self.save_pdf).pack(side="left", padx=(8, 0))
+        ttk.Button(b, text="Close", command=self.dlg.destroy).pack(side="left", padx=(8, 0))
+
+    def done(self, item_id):
+        shop.restocked(self.screen.inventory, item_id)
+        self.screen.reload()
+        self.fill()
+
+    def all_done(self):
+        for it, bring, _, _ in shop.restock_lines(self.screen.inventory):
+            if bring > 0:
+                shop.restocked(self.screen.inventory, it["id"])
+        self.screen.reload()
+        self.fill()
+
+    def lines(self):
+        return [text for _, _, _, text in shop.restock_lines(self.screen.inventory)]
+
+    def print_receipt(self, path=None):
+        import walkin_print
+        path = path or walkin_print.WORK_DIR / "restock.pdf"
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        return print_lines(self.screen.ctx, [datetime.datetime.now().strftime("%d/%m/%Y  %H:%M"), "Restock"],
+                           self.lines(), path)
+
+    def save_pdf(self, path=None):
+        path = path or filedialog.asksaveasfilename(parent=self.dlg, title="Save PDF", defaultextension=".pdf",
+                                                    initialfile=f"Restock {datetime.date.today()}.pdf",
+                                                    filetypes=[("PDF", "*.pdf")])
+        if path:
+            a4_pdf(path, f"Restock {datetime.datetime.now():%d/%m/%Y %H:%M}", self.lines())
+        return path
 
 
 # ------------------------------------------------------------------ Sell
@@ -717,7 +1019,7 @@ class ImportDialog:
         names = ["(none)"] + [f"{chr(65 + i) if i < 26 else i + 1}: {h}" for i, h in enumerate(header)]
         self.col_vars = {}
         labels = {"name": "Name *", "barcode": "Barcode", "category": "Category", "unit": "Unit", "stock": "In stock",
-                  "minimum": "Minimum", "price": "Sale price"}
+                  "minimum": "Minimum", "price": "Sale price", "display": "On display"}
         for k, field in enumerate(inv.FIELDS):
             ttk.Label(self.cols, text=labels[field] + ":").grid(row=k // 4, column=(k % 4) * 2, sticky="e",
                                                                padx=(12, 4), pady=3)
