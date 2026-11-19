@@ -54,6 +54,27 @@ OID_MODEL = "1.3.6.1.2.1.25.3.2.1.3.1"  # hrDeviceDescr.1
 OID_LIFE_COUNT = "1.3.6.1.2.1.43.10.2.1.4.1.1"  # prtMarkerLifeCount: the total counter
 OID_SUPPLIES = "1.3.6.1.2.1.43.11.1.1"  # prtMarkerSuppliesTable
 SUP_TYPE, SUP_DESC, SUP_MAX, SUP_LEVEL = "5", "6", "8", "9"
+# Printer MIB prtMarkerSuppliesLevel special values (2026-11-19_06): -2 unknown (Ricoh: an empty toner, counted as 0,
+# "Empty"), -3 "at least some left" (never empty, percent None, "Some left"); -1 and others stay "not given".
+UNKNOWN, SOME_LEFT = -2, -3
+
+
+def level_text(percent, raw=None):
+    """A toner level on the Data screen: "Empty" (0, or the copier's -2), "Some left" (-3), "34%", "not given"."""
+    if raw == SOME_LEFT and percent is None:
+        return "Some left"
+    if percent is None:
+        return "not given"
+    return "Empty" if percent == 0 else f"{percent}%"
+
+
+def check_text(percent, raw=None):
+    """The same for copier_check.txt, with the copier's own value when it is a special one."""
+    if raw == UNKNOWN:
+        return "Empty (copier says unknown, -2)"
+    if raw == SOME_LEFT:
+        return "Some left (copier says -3)"
+    return level_text(percent, raw)
 OID_RICOH_COUNTERS = "1.3.6.1.4.1.367.3.2.1.2.19.5.1"  # Ricoh counter table: .5 name, .9 value
 RICOH_NAME, RICOH_VALUE = "5", "9"
 GET, GETNEXT, RESPONSE = 0xA0, 0xA1, 0xA2
@@ -319,6 +340,7 @@ def read_copier(address, community="public", timeout=TIMEOUT, page=True):
     counters: total / black / colour, each an int or None (not given). toners: colour -> percent or None."""
     result = {"ok": False, "version": None, "model": "", "counters": {"total": None, "black": None, "colour": None},
               "toners": {c: None for c in COLOURS}, "raw": {"supplies": [], "counters": [], "life": None},
+              "toner_raw": {c: None for c in COLOURS},  # the copier's own level per toner (-2 unknown, -3 some left)
               "error": None}
     if not address:
         result["error"] = "no address"
@@ -352,10 +374,13 @@ def read_copier(address, community="public", timeout=TIMEOUT, page=True):
             if isinstance(level, int) and isinstance(maximum, int) and maximum > 0 and level >= 0:
                 percent = max(0, min(100, round(level * 100 / maximum)))
             colour = toner_colour(desc) if ("toner" in desc.lower() or row.get(SUP_TYPE) == 3) else None
+            if colour and level == UNKNOWN:
+                percent = 0  # Tesla, 2026-11-19: "if it says unknown it means its empty" (the IM C3000's yellow)
             result["raw"]["supplies"].append({"index": index, "description": desc, "type": row.get(SUP_TYPE),
                                               "max": maximum, "level": level, "percent": percent, "colour": colour})
             if colour and result["toners"][colour] is None:
                 result["toners"][colour] = percent
+                result["toner_raw"][colour] = level
         names, values = {}, {}
         for oid, value in snmp.walk(OID_RICOH_COUNTERS):
             column, index = oid[len(OID_RICOH_COUNTERS) + 1:].split(".", 1)
@@ -670,6 +695,8 @@ class TonerWatch:
                 for colour in COLOURS:
                     new = r["toners"][colour]
                     old = (before or {}).get("toners", {}).get(colour)
+                    if old is None and (before or {}).get("toner_raw", {}).get(colour) == UNKNOWN:
+                        old = 0  # a state saved with the copier's -2 kept: unknown is empty
                     if not (isinstance(new, int) and isinstance(old, int) and new - old >= JUMP):
                         continue
                     if near_change(changes, pid, colour, now):
@@ -681,7 +708,8 @@ class TonerWatch:
                     changes.append(change)
                     added.append(change)
                 self.seen_this_run.add(pid)
-                copiers[pid] = {"time": now.isoformat(), "toners": r["toners"], "counters": r["counters"]}
+                copiers[pid] = {"time": now.isoformat(), "toners": r["toners"], "counters": r["counters"],
+                                "toner_raw": r.get("toner_raw") or {}}
             try:
                 if added:
                     write_changes(changes)
@@ -741,7 +769,8 @@ class TonerWatch:
                     lines.append(f"  {name}: {v if v is not None else 'not given'}")
                 for colour in COLOURS:
                     v = r["toners"][colour]
-                    lines.append(f"  {COLOUR_NAMES[colour]} toner: {str(v) + '%' if v is not None else 'not given'}")
+                    raw = (r.get("toner_raw") or {}).get(colour)
+                    lines.append(f"  {COLOUR_NAMES[colour]} toner: {check_text(v, raw)}")
                 lines.append("Supplies (Printer MIB prtMarkerSuppliesTable): index, type, description, max, level, understood")
                 if not r["raw"]["supplies"]:
                     lines.append("  none given")
@@ -915,7 +944,9 @@ class TonersScreen:
             bar.pack(side="left", padx=(0, 8))
             if level is not None:
                 bar.create_rectangle(0, 0, int(80 * level / 100), 14, fill=BAR_COLOURS[colour], width=0)
-            ttk.Label(line, text=f"{level}%" if level is not None else "not given", width=9).pack(side="left")
+            raw = ((r or {}).get("toner_raw") or {}).get(colour) if r and r["ok"] else None
+            ttk.Label(line, text=level_text(level, raw), width=9,
+                      foreground=theme.ERROR if level == 0 else theme.TEXT).pack(side="left")
             spare = self.stock["copiers"][pid][colour]
             warn = "None left" if spare["count"] == 0 else "Order more" if spare["count"] <= spare["min"] else ""
             ttk.Label(line, text=f"Spare: {spare['count']}",

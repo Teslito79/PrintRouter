@@ -79,3 +79,6 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    sort, drop 4 one-page A4 PDFs at once, Add item, place the order and print it. The 4 sheets come out
    of the IM C4510 crosswise one after another (Tray 1, Tray 4, Tray 1, Tray 4). Then one PDF with 3
    copies and Rotate sort: 3 sheets, crosswise.
+17. When the IM C3000's new yellow toner goes in: within 10 minutes (or press Read now on the Data
+   screen) Data records the change by itself (Yellow, automatic) and takes one spare yellow off. If it
+   doesn't, press Toner replaced for it.
