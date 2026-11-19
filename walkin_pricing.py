@@ -179,13 +179,20 @@ def layout(rules, w, h, what):
 # ------------------------------------------------------------------ one item's needs
 
 class Needs:
-    """What one item uses: copies by (size, colour), fixed costs with their working lines, problems."""
+    """What one item uses: copies by (size, colour), fixed costs with their working lines, problems, and (2026-11-19_01)
+    `uses`: what was used, as counts that never need a price (the cover sheet's Counter): {"kind": "paper" /
+    "envelope" / "lamination" / "spiral" / "staple" / "cuts" / "extra" / "service", "name", "count" (None: once per
+    item, or not known), "size" (paper)}. Recorded before any price is looked up, so an empty price cell still counts."""
 
     def __init__(self):
         self.copies = {}  # (size, "bw"/"color") -> count
         self.lines = []  # (text without the amount, amount)
         self.problems = []
         self.sheets = 0
+        self.uses = []
+
+    def use(self, kind, name, count, size=None):
+        self.uses.append({"kind": kind, "name": name, "count": count, "size": size})
 
     def copy(self, size, colour, n):
         if n > 0:
@@ -196,6 +203,7 @@ class Needs:
 
 
 def _paper(pl, n, need, paper, sheet):
+    need.use("paper", paper, n, sheet)
     row = pl.paper_row(paper)
     price = pl.papers.get(row, {}).get(sheet)
     if price is None:
@@ -210,6 +218,10 @@ def _cuts(pl, need, lay, sheets, paper):
         return
     gsm = routing.paper_gsm(paper) or 80
     stack = pl.stack_for(gsm)
+    per = (lay["rows"] + 1) + (lay["cols"] + 1)
+    per_stack = stack[1] if stack else None
+    # the count without a price: an unknown stack size counts as one stack (the cover sheet only)
+    need.use("cuts", "Cuts", per * (math.ceil(sheets / per_stack) if per_stack else 1))
     if stack is None:
         need.problems.append(f"No Sheets per stack row covers {gsm} gsm (the “Paper weight” table on the Prices sheet of {SHEET})")
         return
@@ -221,7 +233,6 @@ def _cuts(pl, need, lay, sheets, paper):
         need.problems.append(no_price("the price per cut"))
         return
     stacks = math.ceil(sheets / per_stack)
-    per = (lay["rows"] + 1) + (lay["cols"] + 1)
     n = per * stacks
     grid_text = f"{lay['rows']} x {lay['cols']}" + (f", {stacks} stacks" if stacks > 1 else "")
     need.cost(f"{n} cuts ({grid_text}) x {money(pl.cut_price)}", n * pl.cut_price)
@@ -229,6 +240,9 @@ def _cuts(pl, need, lay, sheets, paper):
 
 def _extra(pl, need, name, table, what, pieces, sheets):
     price, how = table.get(name, (None, None))[:2]
+    # the count as the sheet charges it (per piece / per sheet); once per item, or Charged empty: the name only
+    need.use("service" if table is pl.services else "extra", name,
+             pieces if how == "piece" else sheets if how == "sheet" else None)
     if price is None:
         need.problems.append(no_price(f"{name} ({what})"))
         return
@@ -298,11 +312,13 @@ def _document(pl, item):
     _paper(pl, c["sheets"], need, item["paper"], size)
     cuts = int(item.get("cuts") or 0)
     if cuts:
+        need.use("cuts", "Cuts", cuts)
         if pl.cut_price is None:
             need.problems.append(no_price("the price per cut"))
         else:
             need.cost(f"{cuts} cuts x {money(pl.cut_price)}", cuts * pl.cut_price)
     if item.get("finish") == "spiral":
+        need.use("spiral", "Spiral binding", c["copies"])
         band = next(((limit, price) for limit, price in pl.spiral if c["sheets_per_copy"] <= limit), None)
         if band is None:
             need.problems.append(f"more than {pl.spiral[-1][0]} sheets per copy can't be spiral bound")
@@ -311,12 +327,14 @@ def _document(pl, item):
         else:
             need.cost(f"Spiral binding: {c['copies']} x {money(band[1])}", c["copies"] * band[1])
     elif item.get("finish") == "staple":
+        need.use("staple", "Staple", c["copies"])
         if pl.staple is None:
             need.problems.append(no_price("Staple (per copy)"))
         else:
             need.cost(f"Staple: {c['copies']} x {money(pl.staple)}", c["copies"] * pl.staple)
     if item.get("lam"):
         n = min(int(item.get("lam_sheets") or 0) or c["sheets"], c["sheets"])
+        need.use("lamination", f"Lamination {size}", n)
         if pl.lamination[size] is None:
             need.problems.append(no_price(f"Lamination {size} (per sheet)"))
         else:
@@ -342,6 +360,7 @@ def _product(pl, item, rules):
     if p["id"] == "envelope":
         kind = size.split()[0]
         price = pl.envelopes.get((size, paper))
+        need.use("envelope", f"{size}, {paper}", qty)
         if price is None:
             need.problems.append(no_price(f"{size}, {paper} envelope"))
         else:
@@ -370,6 +389,7 @@ def _product(pl, item, rules):
         _paper(pl, sheets, need, paper, lay["sheet"])
         _cuts(pl, need, lay, sheets, paper)
         if p["id"] == "stapled":
+            need.use("staple", "Staple", qty)
             if pl.staple is None:
                 need.problems.append(no_price("Staple (per copy)"))
             else:

@@ -180,11 +180,76 @@ def paper_prices(rules=None):
     return rules.get("walkin_paper_prices") is True
 
 
+PLAIN_PAPERS = ("Smooth white 80 gsm", "Normal 80 gsm")  # not listed under Extras
+COPY_ORDER = (("A4", "bw"), ("A4", "color"), ("A3", "bw"), ("A3", "color"))
+COPY_WORDS = {"bw": "B&W", "color": "colour"}
+USE_ORDER = ("envelope", "lamination", "spiral", "staple", "cuts")  # after the papers; extras and services last
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def counter_lines(order, pl=None, rules=None):
+    """The cover sheet's Counter for the whole order (2026-11-19_01, Tesla: "write how many a3/a4 color or black and
+    white we printed, and the extras"): (copy lines, extra lines). Copies are printed sides, the counts the price is
+    worked out from (walkin_pricing.needs), by A4 / A3 and B&W / colour; extras are the papers that aren't plain,
+    envelopes, lamination, spiral, staple, cuts, product extras and services, each added up over the items. Never
+    money. The counts don't need prices; an item that can't be counted at all says so. A product laid out by hand
+    (Layout done) counts the sheets given there."""
+    import walkin_prices
+    pl = pl or walkin_prices.current()
+    copies, papers, uses, extras, unknown = {}, {}, {}, {}, []
+    for i, item in enumerate(order["items"], start=1):
+        try:
+            need = walkin_pricing.needs(pl, item, rules)
+        except Exception:  # an item ORCA can't read (a very old order)
+            need = None
+        if need is None or (need.problems and not need.copies):
+            unknown.append(f"Item {i}: see the order on screen")
+            continue
+        for key, n in need.copies.items():
+            copies[key] = copies.get(key, 0) + n
+        laid = item.get("sheets") if item.get("kind") == "product" else None
+        for u in need.uses:
+            n = u["count"]
+            if u["kind"] == "paper":
+                if laid:
+                    n = int(laid)  # Layout done's sheet count (the cover sheet only, not the price)
+                key = (u["name"], u["size"])
+                papers[key] = papers.get(key, 0) + n
+            elif u["kind"] in ("extra", "service"):
+                if u["name"] not in extras:
+                    extras[u["name"]] = None
+                if n is not None:
+                    extras[u["name"]] = (extras[u["name"]] or 0) + n
+            else:
+                uses.setdefault(u["kind"], {})
+                uses[u["kind"]][u["name"]] = uses[u["kind"]].get(u["name"], 0) + (n or 0)
+    copy_lines = [f"{size} {COPY_WORDS[colour]}: {copies[(size, colour)]}" for size, colour in COPY_ORDER
+                  if copies.get((size, colour))] + unknown
+    extra_lines = [f"{name}: {_plural(n, size + ' sheet')}" for (name, size), n in papers.items()
+                   if name not in PLAIN_PAPERS and n]
+    for kind in USE_ORDER:
+        for name, n in uses.get(kind, {}).items():
+            if not n:
+                continue
+            if kind == "envelope":
+                extra_lines.append(f"{name} envelopes: {n}")
+            elif kind == "lamination":
+                extra_lines.append(f"{name}: {_plural(n, 'sheet')}")
+            else:
+                extra_lines.append(f"{name}: {n}")
+    extra_lines += [f"{name}: {n}" if n else name for name, n in extras.items()]
+    return copy_lines, extra_lines
+
+
 def cover_pdf(order, path, when=None, rules=None):
-    """A plain A4 page: the number large, customer, date, items; every line centred left to right, the block centred
-    top to bottom (Tesla, 2026-11-17). No prices on paper while rules.json walkin_paper_prices is false (2026-11-17_09);
-    true brings the total line back. Item lines never carry money (walkin_pricing.describe). An item list too long
-    for one page starts at the top margin and runs on, so nothing is cut off. Long item lines wrap, each part centred."""
+    """A plain A4 page: the number large, customer, date, and the Counter (2026-11-19_01: copies by size and colour,
+    then the extras; counter_lines); every line centred left to right, the block centred top to bottom (Tesla,
+    2026-11-17). No prices on paper while rules.json walkin_paper_prices is false (2026-11-17_09); true brings the total
+    line back. The Counter never carries money; the items' descriptions stay on screen only. A Counter too long for
+    one page starts at the top margin and runs on, so nothing is cut off. Long lines wrap, each part centred."""
     import counter_pdf
     when = when or datetime.datetime.now()
     w = counter_pdf.Writer()
@@ -202,9 +267,15 @@ def cover_pdf(order, path, when=None, rules=None):
     else:
         lines[-1] = lines[-1][:3] + (lines[-1][3] + 8,)  # the gap the total line left after itself, kept
     lines.append((f"Printed {when.day} {when:%b %Y, %H:%M}   ·   placed {order['created'][:10]}", 11, False, 16))
-    lines.append(("Items", 13, True, 6))
-    for i, item in enumerate(order["items"], start=1):
-        lines += [(part, 11, False, 5) for part in _wrap(w, f"{i}. {item['description']}", 11)]
+    copy_lines, extra_lines = counter_lines(order)
+    lines.append(("Counter", 13, True, 6))
+    for text in copy_lines:
+        lines += [(part, 11, False, 5) for part in _wrap(w, text, 11)]
+    if extra_lines:
+        lines[-1] = lines[-1][:3] + (lines[-1][3] + 10,)
+        lines.append(("Extras", 13, True, 6))
+        for text in extra_lines:
+            lines += [(part, 11, False, 5) for part in _wrap(w, text, 11)]
     height = sum(size + gap for _, size, _, gap in lines) - lines[-1][3]
     room = counter_pdf.PAGE_H - 2 * counter_pdf.MARGIN - 20  # what Writer.room leaves free on a page
     if height <= room:
