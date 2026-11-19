@@ -57,10 +57,16 @@ def read(copier, rules=None, page=True):
     parsed, the SNMP total counter (prtMarkerLifeCount, toners.py): {"how": "total", "total": n}. Raises
     CounterError when neither answers."""
     import toners
-    rules = rules or routing.load_json("rules.json")
+    rules = rules or routing.load_rules()
     address, _ = toners.copier_address(rules["printers"], copier)
+    return read_at(address, page)
+
+
+def read_at(address, page=True):
+    """read() at a given address (Settings' Check address reads an address not saved yet)."""
+    import toners
     if not address:
-        raise CounterError("its network address isn't known (Data screen)")
+        raise CounterError("its network address isn't known (Settings or the Data screen)")
     if page:
         try:
             return from_page(counter_page.parse(counter_page.fetch(address)))
@@ -86,6 +92,24 @@ def from_page(parsed):
                 "copier": {"color": {"pages": pages["color"]}, "bw": {"pages": pages["bw"]}},
                 "other": dict(parsed["other"])}
     raise counter_page.PageError("not a counter page ORCA knows")
+
+
+HOW_TEXT = {"sheets": "Counter page: detailed (sheets)", "pages": "Counter page: B&W / colour only",
+            "total": "Only the total counter (SNMP)"}
+
+
+def check_text(address):
+    """Settings' Check address: what this address gives, in one line."""
+    try:
+        return HOW_TEXT[how_of(read_at(address))]
+    except CounterError:
+        return "No answer"
+
+
+def counting_printers(printers):
+    """The printers the Copy counter shows: those with "Count copies made at this printer" ticked (Settings;
+    printers without the setting, rules.json today, all count)."""
+    return [pid for pid, p in printers.items() if p.get("copy_counter", True)]
 
 
 def how_of(reading):

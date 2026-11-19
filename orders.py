@@ -528,7 +528,7 @@ def product_lines(doc):
 
 
 def main():
-    rules = routing.load_json("rules.json")
+    rules = routing.load_rules()
     folder = Path(sys.argv[1]) if len(sys.argv) > 1 else orders_dir(rules)
     orders = load_orders(folder, rules)
     print(f"{len(orders)} order(s) in {folder}\n")

@@ -174,7 +174,7 @@ def paper_prices(rules=None):
     (Tesla, 2026-11-17: "do not include any prices"); a missing setting counts as false."""
     if rules is None:
         try:
-            rules = routing.load_json("rules.json")
+            rules = routing.load_rules()
         except Exception:
             rules = {}
     return rules.get("walkin_paper_prices") is True

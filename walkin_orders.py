@@ -499,7 +499,7 @@ def _rules(rules=None):
         return rules
     key = str(routing.app_dir())
     if key not in _RULES:
-        _RULES[key] = routing.load_json("rules.json")
+        _RULES[key] = routing.load_rules()
     return _RULES[key]
 
 

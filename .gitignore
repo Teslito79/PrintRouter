@@ -48,3 +48,5 @@ sales_log.csv
 .sales_log.csv.tmp
 copy_counter.json
 .copy_counter.json.tmp
+settings.json
+.settings.json.tmp

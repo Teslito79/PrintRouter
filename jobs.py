@@ -102,6 +102,22 @@ class Jobs:
         # Functions giving the copiers ORCA is using right now (the PrintHub view, the main
         # window's batch being sent); a colour job then goes to the rule's if_busy copier.
         self.busy_sources = []
+        self._missing = (0.0, set())
+
+    def missing(self):
+        """Printers whose Windows printer isn't on this PC (Settings: "Not found"); routing skips them like busy
+        ones when another can take the job. Asked again at most every 30 seconds."""
+        import time
+        when, found = self._missing
+        if time.monotonic() - when > 30:
+            found = routing.missing_printers(self.rules)
+            self._missing = (time.monotonic(), found)
+        return found
+
+    def settings_changed(self):
+        """Settings were saved (2026-11-18_02): read the drivers' options and the installed printers again."""
+        self._missing = (0.0, set())
+        self.printer_options = self._read_printer_options()
 
     def busy(self):
         found = set()
@@ -206,7 +222,7 @@ class Jobs:
             job["content"] = (routing.resolve_content(self.rules, "auto", coverage)
                               if job["color"] else "document")
             printer_id, reason = routing.choose_printer(self.rules, job,
-                                                        self.busy() if busy is None else busy)
+                                                        self.busy() if busy is None else busy, self.missing())
             if job["rotate"]:
                 printer_id, reason = self.rules["rotate_sort"]["printer"], "Rotate sort"
         else:
@@ -219,6 +235,7 @@ class Jobs:
             job["problem"] = "A5 is already 2 on A4: set Pages per side to 1"
         else:
             job["problem"] = (self.rotate_problem(printer_id, job) or self.weight_problem(printer_id, job)
+                              or self.capability_problem(printer_id, job)
                               or self.missing_options(printer_id, job) or self.refused(printer_id, job))
         return job
 
@@ -229,11 +246,18 @@ class Jobs:
             return f"{self.printers[printer_id]['label']} takes up to {limit} gsm, this is {job['gsm']} gsm"
         return None
 
+    def capability_problem(self, printer_id, job):
+        """Text when no printer can take this job (colour on B&W only, A3 on A4 only: Settings), or None."""
+        why = routing.unable(self.rules, printer_id, job)
+        return f"No printer can take this: {why}" if why else None
+
     def rotate_problem(self, printer_id, job):
         """Text saying why rotate sort can't be used for this job, or None."""
         if not job["rotate"]:
             return None
         rs = self.rules["rotate_sort"]
+        if rs.get("printer") not in self.printers:
+            return "Rotate sort isn't set up on this PC's printers"
         if printer_id != rs["printer"]:
             return f"Rotate sort only on {self.printers[rs['printer']]['label']}"
         if job["paper"] != "A4":

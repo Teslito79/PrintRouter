@@ -29,7 +29,7 @@ def main():
     appicon.apply(root)  # every window opened from here on shows icon.ico
     appicon.fix_shortcut_later()  # ORCA.lnk in the top folder gets the icon (in the background)
     try:
-        rules = routing.load_json("rules.json")
+        rules = routing.load_rules()
         routing.load_json("prices.json")
     except Exception as e:
         root.withdraw()

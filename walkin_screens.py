@@ -437,7 +437,7 @@ class CopyCounterScreen(Screen):
         body = ttk.Frame(self.frame)
         body.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
         self.frame.rowconfigure(2, weight=1)
-        for c, pid in enumerate(self.manager.printers):
+        for c, pid in enumerate(copy_counter.counting_printers(self.manager.printers)):
             body.columnconfigure(c, weight=1, uniform="copier")
             box = ttk.LabelFrame(body, text=self.manager.label(pid), padding=10, style="Section.TLabelframe")
             box.grid(row=0, column=c, sticky="nsew", padx=6)
@@ -486,7 +486,9 @@ class CopyCounterScreen(Screen):
 
     # -------------------------------------------------------------- one panel
     def build(self, pid):
-        box = self.panels[pid]
+        box = self.panels.get(pid)
+        if box is None:  # not shown (Settings: not counted at this printer)
+            return
         for w in box.winfo_children():
             w.destroy()
         box.columnconfigure(0, weight=1)
@@ -691,13 +693,16 @@ class CopyCounterScreen(Screen):
             r += 1
         buttons = ttk.Frame(box)
         buttons.grid(row=r, column=0, sticky="w", pady=(10, 0))
-        pr = ttk.Button(buttons, text="Print receipt", command=lambda: self.print_receipt(pid))
-        pr.pack(side="left")
+        pr = None
+        if self.ctx.rules.get("receipt_printer"):  # Settings: Receipt printer None hides it (2026-11-18_02)
+            pr = ttk.Button(buttons, text="Print receipt", command=lambda: self.print_receipt(pid))
+            pr.pack(side="left", padx=(0, 8))
         dn = ttk.Button(buttons, text="Done", style="Print.TButton", command=lambda: self.done(pid))
-        dn.pack(side="left", padx=(8, 0))
+        dn.pack(side="left")
         if priced["problems"]:
-            pr.state(["disabled"])
-            dn.state(["disabled"])
+            for b in (pr, dn):
+                if b is not None:
+                    b.state(["disabled"])
 
     # -------------------------------------------------------------- actions
     def start(self, pid, typed=False):

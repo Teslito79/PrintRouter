@@ -1,4 +1,4 @@
-"""The main menu ORCA opens on: Walk-in, Orders, PrintHub, Counter, Prices, Data (Tesla, 2026-11-15 to 17).
+"""The main menu ORCA opens on: Walk-in, Orders, PrintHub, Counter, Prices, Data, Settings (Tesla, 2026-11-15 to 18).
 
 Only one window shows at a time: the menu or one screen. Each screen's Back button (or its X) comes back here;
 closing the menu closes ORCA. The menu starts what runs whatever shows: the ttk style, the website sync, the
@@ -17,6 +17,7 @@ import counter
 import jobs
 import printhub
 import routing
+import settings_screen
 import sync
 import theme
 import toners
@@ -45,7 +46,7 @@ class MainMenu:
     def __init__(self, root):
         self.root = root
         setup_style(root)
-        self.rules = routing.load_json("rules.json")
+        self.rules = routing.load_rules()
         self.prices = routing.load_json("prices.json")
         self.jobs = jobs.Jobs(self.rules, self.prices)  # routing, checks and sending, shared by every screen
         threading.Thread(target=self.jobs.warm_up_checks, daemon=True).start()
@@ -80,7 +81,8 @@ class MainMenu:
         ttk.Label(f, text="ORCA", style="Title.TLabel").grid(row=0, column=0, pady=(0, 24))
         for r, (text, command) in enumerate((("Walk-in", self.open_walkin), ("Orders", self.open_orders),
                                              ("PrintHub", self.open_printhub), ("Counter", self.open_counter),
-                                             ("Prices", self.open_prices), ("Data", self.open_toners)),
+                                             ("Prices", self.open_prices), ("Data", self.open_toners),
+                                             ("Settings", self.open_settings)),
                                             start=1):
             button = ttk.Button(f, text=text, style="Menu.TButton", width=16, command=command)
             button.grid(row=r, column=0, sticky="we", pady=6)
@@ -88,8 +90,13 @@ class MainMenu:
                 # A red dot while a spare toner count is at or below its minimum (toners.stock_low).
                 self.toner_dot = tk.Label(button, text="●", foreground=theme.ERROR, background=theme.BUTTON,
                                           font=("Segoe UI", 16), borderwidth=0)
+        # 2026-11-18_02: a shop whose printers aren't installed here (the demo, a new shop) is told where to go.
+        ttk.Style(win).configure("MenuWarn.TLabel", foreground=theme.WARN)
+        self.printer_line = ttk.Label(f, text="", style="MenuWarn.TLabel", justify="center", wraplength=380)
+        self.printer_line.grid(row=8, column=0, pady=(18, 0))
+        self.show_printer_line()
         self.sync_label = ttk.Label(f, text="", style="Hint.TLabel", justify="center", wraplength=380)
-        self.sync_label.grid(row=8, column=0, pady=(22, 0))
+        self.sync_label.grid(row=9, column=0, pady=(22, 0))
         theme.dark_title_bar(win)
         self.print_queue.parent = win
         self.show_sync()
@@ -138,6 +145,49 @@ class MainMenu:
     def open_toners(self):
         screen = toners.TonersScreen(self.root, self.rules, self.toners, on_back=self.show_menu)
         self.open_screen(screen.win)
+
+    def open_settings(self):
+        """Settings (2026-11-18_02): behind the same password as Prices."""
+        if not costs.ask_to_open(self.win):
+            return
+        self.open_screen(settings_screen.SettingsScreen(self, on_back=self.show_menu).win)
+
+    NO_PRINTERS = "No printers set up yet: open Settings"
+
+    def show_printer_line(self):
+        """One yellow line when no printer in force is installed on this PC (never blocks anything)."""
+        installed = routing.installed_printers()
+        none = installed is not None and not any(p.get("queue") in installed for p in self.rules["printers"].values())
+        self.printer_line.config(text=self.NO_PRINTERS if none else "")
+        if none:
+            self.printer_line.grid()
+        else:
+            self.printer_line.grid_remove()
+
+    def apply_settings(self):
+        """Settings saved (or reset): the rules in force are loaded again and changed in place, so the queues, the
+        copy counter, PrintHub and the Data screen use them for new jobs at once. Jobs already sent keep their
+        printer."""
+        new = routing.load_rules()
+        before = set(self.rules["printers"])
+        printers = self.rules["printers"]  # the same dict everyone holds
+        printers.clear()
+        printers.update(new.pop("printers"))
+        for key in [k for k in self.rules if k not in new and k != "printers"]:
+            del self.rules[key]
+        self.rules.update(new)
+        for pid in printers:
+            self.print_queue.copiers.setdefault(pid, {"state": "idle"})
+        threading.Thread(target=self.jobs.settings_changed, daemon=True).start()
+        if set(printers) != before and self.printhub is not None:
+            busy = any(self.printhub.busy_with(pid) for pid in before)
+            if not busy and not self.printhub.sending():
+                try:
+                    self.printhub.win.destroy()
+                except tk.TclError:
+                    pass
+                self.printhub = None  # made again with the new printers when opened
+        self.show_printer_line()
 
     def show_sync(self):
         """The website sync's state, the same line as in PrintHub."""

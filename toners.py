@@ -271,13 +271,37 @@ def classify_counters(names):
 
 
 def copier_address(printers, pid, settings=None):
-    """(address, where it came from) of a copier: typed in the Data screen, else the queue's port."""
+    """(address, where it came from) of a copier: its Network address in Settings (settings.json, 2026-11-18_02; it
+    wins), else typed in the Data screen (toner_settings.json), else the queue's port."""
+    own = str(printers.get(pid, {}).get("address") or "").strip()
+    if own:
+        return own, "set in Settings"
     settings = settings or load_settings()
     typed = settings["addresses"].get(pid)
     if typed:
         return typed, "typed in the Data screen"
     found = queue_address(printers[pid]["queue"])
     return (found, "from the Windows queue's port") if found else (None, "not found")
+
+
+def save_address(printers, pid, address):
+    """Write a printer's Network address into settings.json (2026-11-18_02), and into the printers in force."""
+    import copy
+    local = routing.load_local()
+    mine = copy.deepcopy(local.get("printers") or printers)
+    if pid not in mine:
+        return
+    if address:
+        mine[pid]["address"] = address
+    else:
+        mine[pid].pop("address", None)
+    local["printers"] = mine
+    shipped = routing.shipped_rules()
+    routing.save_local(routing.local_diff(shipped, routing.merge(shipped, local)))
+    if address:
+        printers[pid]["address"] = address
+    else:
+        printers.get(pid, {}).pop("address", None)
 
 
 def read_total(address, community="public", timeout=TIMEOUT):
@@ -978,7 +1002,7 @@ class AddressDialog:
         ttk.Label(f, text=screen.printers[pid]["label"], style="Head.TLabel").grid(row=0, column=0, columnspan=2,
                                                                                   sticky="w", pady=(0, 8))
         ttk.Label(f, text="Address:").grid(row=1, column=0, sticky="w", pady=3)
-        self.address = tk.StringVar(value=settings["addresses"].get(pid, ""))
+        self.address = tk.StringVar(value=screen.printers[pid].get("address") or settings["addresses"].get(pid, ""))
         ttk.Entry(f, textvariable=self.address, width=22, font=font).grid(row=1, column=1, sticky="w", pady=3)
         ttk.Label(f, text="SNMP community:").grid(row=2, column=0, sticky="w", pady=3)
         self.community = tk.StringVar(value=settings["community"])
@@ -1003,6 +1027,7 @@ class AddressDialog:
         settings["community"] = self.community.get().strip() or "public"
         try:
             save_settings(settings)
+            save_address(self.screen.printers, self.pid, address)  # Settings' Network address too (one place)
         except OSError as e:
             messagebox.showwarning(parent=self.dlg, title="Data", message=f"Could not save.\n\n{e}")
             return
