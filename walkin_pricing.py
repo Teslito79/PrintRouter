@@ -211,7 +211,7 @@ def _cuts(pl, need, lay, sheets, paper):
     gsm = routing.paper_gsm(paper) or 80
     stack = pl.stack_for(gsm)
     if stack is None:
-        need.problems.append(f"No Sheets per stack row covers {gsm} gsm on the Cutting sheet of {SHEET}")
+        need.problems.append(f"No Sheets per stack row covers {gsm} gsm (the “Paper weight” table on the Prices sheet of {SHEET})")
         return
     label, per_stack = stack
     if per_stack is None:

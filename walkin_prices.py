@@ -1,9 +1,11 @@
 """Walk-in prices from Walk-in_Prices.xlsx (Tesla fills in the yellow cells; 2026-11-17_08: copies, paper, cuts).
 
 An item costs copies x price per copy + sheets x paper price + cuts x price per cut + extras (walkin_pricing.py).
-The sheet holds only those unit prices: Copies (per printed side, A4/A3, B&W/colour, three tiers), Paper (per sheet
-used, A4/A3, label sheets, envelopes), Cutting (price per cut, sheets per stack by paper weight), Extras (finishing,
-product extras, services) and Settings (where tiers 2 and 3 start, loyalty %, spending per level).
+The sheet holds only those unit prices: copies (per printed side, A4/A3, B&W/colour, three tiers), paper (per sheet
+used, A4/A3, label sheets, envelopes), cutting (price per cut, sheets per stack by paper weight), extras (finishing,
+product extras, services) and settings (where tiers 2 and 3 start, loyalty %, spending per level).
+Since 2026-11-18_04 the file has two sheets: "Prices" (every table, top to bottom, its title in A1) and "Settings".
+The older six sheets (Read me, Copies, Paper, Cutting, Extras, Settings) are still read. Warnings name the real sheet.
 
 An empty yellow cell means "not sold": an item that needs it can't be added. Nothing is ever guessed and there is no
 website fallback. A missing or unreadable file means no prices at all, with a yellow line.
@@ -23,7 +25,7 @@ import routing
 FILE = "Walk-in_Prices.xlsx"
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
-TRIAL = "Trial price list: every price is 0"  # the Read me title says TEST (2026-11-17_09)
+TRIAL = "Trial price list: every price is 0"  # the title (A1 of Read me, or of Prices) says TEST (2026-11-17_09)
 NO_PRICES = f"The price list has no prices yet: fill in the yellow cells in {FILE}. Until then no item can be added."
 LABEL_SHEET = "Label sheet"
 NORMAL_PAPER = "Normal 80 gsm"  # the documents' plain paper: priced from the "Smooth white 80 gsm" row
@@ -112,7 +114,7 @@ class PriceList:
     def __init__(self):
         self.warnings = []
         self.missing = None
-        self.trial = False  # the sheet's Read me title contains "TEST": a trial price list
+        self.trial = False  # the title (A1 of Read me, or of the first sheet) contains "TEST": a trial price list
         self.filled = 0  # cells with a number in them
         self.copies = {(s, m): [None, None, None] for s in ("A4", "A3") for m in ("bw", "color")}  # per copy, tiers
         self.papers = {}  # paper name -> {"A4": EUR per sheet or None, "A3": ...}, in sheet order
@@ -206,8 +208,7 @@ COPY_LINES = {"a4 black and white": ("A4", "bw"), "a4 colour": ("A4", "color"), 
               "a3 black and white": ("A3", "bw"), "a3 colour": ("A3", "color"), "a3 color": ("A3", "color")}
 
 
-def _read_copies(pl, rows):
-    sheet = "Copies"
+def _read_copies(pl, rows, sheet="Copies"):
     h = _find_header(rows, "Copy", "Tier")
     if h is None:
         pl.warn(sheet, "-", "the “Copy / Tier 1” heading row wasn't found: copies have no prices.")
@@ -222,8 +223,7 @@ def _read_copies(pl, rows):
             pl.copies[key][k] = pl.value(sheet, r, _cell(values, col), f"{_cell(values, 0)}, Tier {k + 1}")
 
 
-def _read_paper(pl, rows):
-    sheet = "Paper"
+def _read_paper(pl, rows, sheet="Paper"):
     h = _find_header(rows, "Paper", "A4")
     if h is None:
         pl.warn(sheet, "-", "the “Paper / A4 sheet” heading row wasn't found: papers have no prices.")
@@ -250,8 +250,7 @@ def _read_paper(pl, rows):
         pl.envelopes[(size.strip(), kind.strip())] = pl.value(sheet, r, _cell(values, col), f"{name} envelope")
 
 
-def _read_cutting(pl, rows):
-    sheet = "Cutting"
+def _read_cutting(pl, rows, sheet="Cutting"):
     for r, values in rows:
         if (_cell(values, 0) or "").strip().lower() == "price per cut":
             pl.cut_price = pl.value(sheet, r, _cell(values, 1), "the price per cut")
@@ -276,8 +275,7 @@ def _read_cutting(pl, rows):
         pl.stacks.append((lo, hi, label, int(n) if n else None))
 
 
-def _read_extras(pl, rows):
-    sheet = "Extras"
+def _read_extras(pl, rows, sheet="Extras"):
     h = _find_header(rows, "Finishing", "Unit")
     if h is None:
         pl.warn(sheet, "-", "the “Finishing / Unit” heading row wasn't found: no lamination, binding or staples.")
@@ -328,8 +326,7 @@ def _read_extras(pl, rows):
                 target[name] = (value, how)
 
 
-def _read_settings(pl, rows):
-    sheet = "Settings"
+def _read_settings(pl, rows, sheet="Settings"):
     for r, values in rows:
         label = (_cell(values, 0) or "").strip().lower()
         value = _cell(values, 2)
@@ -377,18 +374,25 @@ def load(path=None):
         pl.missing = f"{FILE} can't be read ({type(e).__name__}): no item can be priced until it can."
         pl.warnings.append(pl.missing)
         return pl
-    for name, reader in (("Copies", _read_copies), ("Paper", _read_paper), ("Cutting", _read_cutting),
-                         ("Extras", _read_extras), ("Settings", _read_settings)):
+    if "Prices" in sheets:  # 2026-11-18_04: two sheets, "Prices" (every table, top to bottom) and "Settings"
+        plan = [("Prices", _read_copies), ("Prices", _read_paper), ("Prices", _read_cutting),
+                ("Prices", _read_extras), ("Settings", _read_settings)]
+    else:  # the older six-sheet file: still read
+        plan = [("Copies", _read_copies), ("Paper", _read_paper), ("Cutting", _read_cutting),
+                ("Extras", _read_extras), ("Settings", _read_settings)]
+    for name, reader in plan:
         if name not in sheets:
             pl.warn(name, "-", "this sheet is missing: it gives no prices.")
             continue
         try:
-            reader(pl, sheets[name])
+            reader(pl, sheets[name], name)
         except Exception as e:
             pl.warn(name, "-", f"couldn't be read ({type(e).__name__}): it gives no prices.")
     if pl.filled == 0:
         pl.warnings.insert(0, NO_PRICES)
-    title = next((v[0] for _, v in sheets.get("Read me", []) if v and v[0]), "") or ""
+    # the title: A1 of "Read me" (older files), else A1 of the first sheet ("Prices")
+    title_rows = sheets["Read me"] if "Read me" in sheets else next(iter(sheets.values()), [])
+    title = next((v[0] for r, v in title_rows if r == 1 and v and v[0]), "") or ""
     if "TEST" in str(title):
         pl.trial = True
         pl.warnings.insert(0, TRIAL)  # so nobody mistakes it for real prices
