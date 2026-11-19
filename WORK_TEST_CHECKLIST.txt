@@ -86,7 +86,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    colour jobs go to IM C4510"), add a colour flyer or a colour document on Silk paper in Add Email.
    Print Jobs shows it going to the IM C4510 with "IM C3000 is out of yellow toner: sent to IM C4510".
 19. Shopify at the end of the day: export the inventory from Shopify as a CSV, as for inventory_export_1.csv,
-   then main menu > Inventory management > End of day: load Shopify stock… and pick the file (the first
+   then main menu > Inventory management and drag the Shopify export onto the drop box (the first
    load says "First load: from tomorrow ORCA shows what sold"). Set On display for 3 items (On display…).
    The next day, after one of them sold in Shopify, export and load again: Sold lists it, and the
    Restock list says how many to bring. Press Restocked, and Print the list on the receipt printer.

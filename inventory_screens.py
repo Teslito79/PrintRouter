@@ -12,6 +12,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import costs
+import filedrop
 import inventory as inv
 import shopify_stock as shop
 import theme
@@ -116,9 +117,21 @@ class InventoryScreen(Screen):
         right.pack(side="right")
         for text, command, style in (("Add item…", self.add, None), ("Import list…", self.import_list, None),
                                      ("Export list…", self.export, None), ("Sell", self.sell, "Print.TButton")):
-            ttk.Button(right, text=text, command=command, style=style or "TButton").pack(side="left", padx=(8, 0))
-        ttk.Button(day, text="End of day: load Shopify stock…", command=self.load_shopify).pack(side="left")
+            b = ttk.Button(right, text=text, command=command, style=style or "TButton")
+            b.pack(side="left", padx=(8, 0))
+            if text == "Import list…":
+                filedrop.target(b, lambda paths, x, y: self.dropped(paths))
+        end_btn = ttk.Button(day, text="End of day: load Shopify stock…", command=self.load_shopify)
+        end_btn.pack(side="left")
         ttk.Button(day, text="Restock", command=self.restock).pack(side="left", padx=(8, 0))
+        # The drop box (2026-11-19_10, Tesla: "make it drag and drop"): the Shopify export runs the end-of-day load,
+        # any other .csv / .xlsx Import list. Dropping on those two buttons does the same.
+        self.drop_box = tk.Label(day, text="⤓  Drop the Shopify stock file or an item list here", background=theme.FIELD,
+                                 foreground=theme.TEXT, font=("Segoe UI", 11), padx=14, pady=6, highlightthickness=2,
+                                 highlightbackground=theme.PRIMARY, highlightcolor=theme.PRIMARY)
+        self.drop_box.pack(side="left", padx=(16, 0))
+        filedrop.target(self.drop_box, lambda paths, x, y: self.dropped(paths))
+        filedrop.target(end_btn, lambda paths, x, y: self.dropped(paths))
         self.restock_line = ttk.Label(day, text="", style="Warn.TLabel")
         self.restock_line.pack(side="left", padx=(16, 0))
         ttk.Label(f, text="Shopify items: the next end-of-day load replaces ORCA's own stock changes for them "
@@ -270,8 +283,11 @@ class InventoryScreen(Screen):
     def load_shopify(self, path=None):
         """End of day: load Shopify stock (a CSV exported from Shopify), then show Sold / Came in and the restock
         list."""
-        path = path or filedialog.askopenfilename(parent=self.win, title="Load Shopify stock",
-                                                  filetypes=[("Shopify inventory export", "*.csv"), ("All files", "*.*")])
+        if not path:
+            import walkin_screens
+            picked = walkin_screens.choose_files(self.win, False, "Load Shopify stock",
+                                                 [("Shopify inventory export", "*.csv"), ("All files", "*.*")])
+            path = picked[0] if picked else None
         if not path:
             return None
         older = shop.older_than_last(self.inventory, path)
@@ -315,10 +331,24 @@ class InventoryScreen(Screen):
             self.message.config(text=f"Exported to {path}")
 
     def import_list(self):
-        path = filedialog.askopenfilename(parent=self.win, title="Import list",
-                                          filetypes=[("Spreadsheets", "*.xlsx *.csv"), ("All files", "*.*")])
-        if path:
-            ImportDialog(self, path)
+        import walkin_screens
+        paths = walkin_screens.choose_files(self.win, False, "Import list",
+                                            [("Spreadsheets", "*.xlsx *.csv"), ("All files", "*.*")])
+        if paths:
+            ImportDialog(self, paths[0])
+
+    def dropped(self, paths):
+        """A file dropped on the box (or the End of day / Import list buttons): a Shopify export runs the end-of-day
+        load, any other .csv or .xlsx Import list. One file at a time; folders, empty files and other types are
+        refused with a message, changing nothing."""
+        why = drop_problem(paths)
+        if why:
+            messagebox.showwarning(parent=self.win, title="Inventory", message=why)
+            return None
+        path = paths[0]
+        if is_shopify_file(path):
+            return self.load_shopify(path)
+        return ImportDialog(self, path)
 
     def sell(self):
         self.win.withdraw()
@@ -331,6 +361,36 @@ class InventoryScreen(Screen):
     def back(self):
         self.win.unbind_all("<Key>")
         super().back()
+
+
+def drop_problem(paths):
+    """Why dropped files can't be used on the Inventory screen, or None (2026-11-19_10)."""
+    import os
+    if len(paths) != 1:
+        return "Drop one file at a time."
+    p = Path(paths[0])
+    if p.is_dir():
+        return f"{p.name} is a folder: drop the file itself."
+    if p.suffix.lower() not in (".csv", ".xlsx"):
+        return f"{p.name}: drop a .csv or .xlsx file."
+    try:
+        if os.path.getsize(p) == 0:
+            return f"{p.name} is empty."
+    except OSError as e:
+        return f"{p.name} can't be read ({type(e).__name__})."
+    return None
+
+
+def is_shopify_file(path):
+    """A Shopify inventory export (the columns Handle, Title, SKU, On hand (current)), read from its first line."""
+    if not str(path).lower().endswith(".csv"):
+        return False
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            header = next(csv.reader(f), [])
+    except (OSError, UnicodeDecodeError):
+        return False
+    return shop.is_shopify(header)
 
 
 def export_csv(inventory, path):

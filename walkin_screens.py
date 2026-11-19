@@ -173,12 +173,43 @@ def same_file(path, others):
 MULTI_COLOURS = {"B&W": "bw", "Colour": "color"}  # several files: no list of colour pages (it can't fit them all)
 
 
+DOWNLOADS = Path.home() / "Downloads"  # where customers' and Shopify's files usually land (2026-11-19_10)
+
+
+def choose_files(parent, many, title="Choose file", types=None):
+    """The file window (Tesla, 2026-11-19: always a drop box and a button): opens on Downloads; several files where a
+    drop takes several. [] when closed."""
+    from tkinter import filedialog
+    start = str(DOWNLOADS) if DOWNLOADS.is_dir() else None
+    types = types or [("All files", "*.*")]
+    if many:
+        return list(filedialog.askopenfilenames(parent=parent, title=title, initialdir=start, filetypes=types) or [])
+    one = filedialog.askopenfilename(parent=parent, title=title, initialdir=start, filetypes=types)
+    return [one] if one else []
+
+
 def drop_area(parent, kind, on_drop):
-    """The box under an item that files can be dropped on (filedrop.py): on_drop(paths, x, y)."""
-    label = tk.Label(parent, text=DROP_TEXT[kind], background=theme.FIELD, foreground=theme.MUTED,
+    """The box under an item that files can be dropped on (filedrop.py), with a Choose file… button beside it
+    (2026-11-19_10) whose files take exactly the same path as a drop: on_drop(paths, x, y). The box's text is
+    area.label (a product item takes several files, a document one)."""
+    area = ttk.Frame(parent)
+    label = tk.Label(area, text=DROP_TEXT[kind], background=theme.FIELD, foreground=theme.MUTED,
                      font=("Segoe UI", 10), padx=12, pady=3, highlightthickness=1,
                      highlightbackground=theme.BORDER, highlightcolor=theme.BORDER, anchor="w", justify="left")
-    return filedrop.target(label, on_drop)
+    label.pack(side="left")
+    filedrop.target(label, on_drop)
+
+    top = parent.winfo_toplevel()
+
+    def choose():
+        paths = choose_files(top, many=kind == "product")
+        if paths:
+            on_drop(paths, 0, 0)
+
+    ttk.Button(area, text="Choose file…", command=choose).pack(side="left", padx=(8, 0))
+    area.label = label
+    area.choose = choose
+    return filedrop.target(area, on_drop)
 
 
 def ask_item(parent, labels):
@@ -1506,7 +1537,16 @@ class QuoteScreen(Screen):
                 if n > self.BOX_ROWS:
                     for w in (name, x):
                         w.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"), add="+")
+        # Choose file… (2026-11-19_10): the same as a drop; several files for a product, and for a document (19_04)
+        tk.Button(self.box, text="Choose file…", command=self.choose_for_box, background=theme.BUTTON,
+                  foreground=theme.TEXT, activebackground=theme.BUTTON, activeforeground=theme.TEXT, relief="flat",
+                  font=("Segoe UI", 10), padx=8, pady=1, cursor="hand2").grid(row=2, column=0, sticky="w", pady=(4, 2))
         self.show_multi()
+
+    def choose_for_box(self):
+        paths = choose_files(self.win, many=True)
+        if paths:
+            self.drop_in_box(paths)
 
     def rotate_reason(self, item):
         import routing
@@ -2048,9 +2088,9 @@ class NumberDialog:
                 f = wo.item_file(self.order, item)
                 names = [p.name for p in wo.customer_files(self.order, item)] + ([f.name] if f else [])
             if names:
-                area.config(text=f"✓ {', '.join(names)}   (drop here to add or replace)", foreground=theme.OK)
+                area.label.config(text=f"✓ {', '.join(names)}   (drop here to add or replace)", foreground=theme.OK)
             else:
-                area.config(text=DROP_TEXT[item["kind"]], foreground=theme.MUTED)
+                area.label.config(text=DROP_TEXT[item["kind"]], foreground=theme.MUTED)
 
 
 # ------------------------------------------------------------------ shared order cards
