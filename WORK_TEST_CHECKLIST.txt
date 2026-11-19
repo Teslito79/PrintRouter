@@ -63,3 +63,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    (IM C4510, IM C3000, MP C3004) with their Windows printers, none in red, and Which printer does
    what as today: Black and white IM C4510, Colour documents MP C3004, Everything else IM C3000 (if
    busy IM C4510). Press Check address on each copier and note what it says. Change nothing, Back.
+14. Many files and the Orders list: Add Email, Document, drop 5 PDFs at once on the box next to
+   Add item. The box says "5 files: Add item makes 5 document items with these settings". Add item:
+   there are 5 items, each named by its file with its own pages. Then main menu > Orders: each order
+   is one line (number, customer, status, date) with Details...; Details... shows the items and files.

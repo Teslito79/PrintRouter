@@ -123,6 +123,56 @@ def pdf_pages(path):
         return None
 
 
+def file_pages(path):
+    """Pages a file prints as a document, when ORCA knows at once: a PDF's page count, an image 1; else None (an
+    Office file: counted in the background, count_pages)."""
+    suffix = Path(path).suffix.lower()
+    if suffix == ".pdf":
+        return pdf_pages(path)
+    import convert
+    return 1 if suffix in convert.IMAGE_EXT else None
+
+
+def count_pages(path, size):
+    """An Office file's page count the way the order's conversion does it (convert.py, on a thread), or None."""
+    import tempfile
+    import convert
+    out = Path(tempfile.mkdtemp(prefix="orca_pages_")) / "count.pdf"
+    try:
+        convert.to_pdf(path, out, size)
+        return pdf_pages(out)
+    except Exception:
+        return None
+    finally:
+        try:
+            out.unlink()
+            out.parent.rmdir()
+        except OSError:
+            pass
+
+
+def same_file(path, others):
+    """True when this file is already among others: the same path, or the same name and size (a second copy)."""
+    path = Path(path)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = None
+    for other in others:
+        o = Path(other)
+        if o == path:
+            return True
+        try:
+            if o.name.lower() == path.name.lower() and o.stat().st_size == size:
+                return True
+        except OSError:
+            pass
+    return False
+
+
+MULTI_COLOURS = {"B&W": "bw", "Colour": "color"}  # several files: no list of colour pages (it can't fit them all)
+
+
 def drop_area(parent, kind, on_drop):
     """The box under an item that files can be dropped on (filedrop.py): on_drop(paths, x, y)."""
     label = tk.Label(parent, text=DROP_TEXT[kind], background=theme.FIELD, foreground=theme.MUTED,
@@ -1239,9 +1289,11 @@ class QuoteScreen(Screen):
                          "cuts": 0}
             v = self.option_vars
             v["size"] = combo("Size", ["A4", "A3"], d["size"])
-            v["pages"] = entry("Pages", d["pages"])
+            v["pages"] = entry("Pages", d["pages"] if d["pages"] else "")
+            self.pages_entry = self.options.grid_slaves(row=row - 1, column=1)[0]
             v["copies"] = entry("Copies", d["copies"])
             v["color"] = combo("Colour", list(COLOUR_CHOICES), next(k for k, x in COLOUR_CHOICES.items() if x == d["color"]))
+            self.colour_box = self.options.grid_slaves(row=row - 1, column=1)[0]
             v["color_pages"] = entry("Colour pages (e.g. 1, 3-5)", d["color_pages"], 16)
             v["sides"] = combo("Sides", list(SIDE_CHOICES), next(k for k, x in SIDE_CHOICES.items() if x == d["sides"]))
             v["per_side"] = combo("Pages per side", [str(n) for n in cat.PER_SIDE], str(d["per_side"]))
@@ -1292,44 +1344,177 @@ class QuoteScreen(Screen):
     def form_kind(self):
         return "document" if self.what.get() == "Document" else "product"
 
+    def multi(self):
+        """Several files held for a Document: Add item makes one item per file (2026-11-19_04)."""
+        return self.form_kind() == "document" and len(self.held) > 1 and self.editing is None
+
+    BOX_ROWS = 5  # files shown in the box before its list scrolls (Add item and Place order stay on the screen)
+
     def show_box(self):
-        """The box: its wording (as the boxes in Orders), then each held file with an x to take it off."""
+        """The box: its wording (as the boxes in Orders), then each held file with an x to take it off. Several files
+        for a Document say what Add item will do; a long list scrolls inside the box."""
         for w in self.box.winfo_children():
             w.destroy()
-        tk.Label(self.box, text=DROP_TEXT[self.form_kind()].replace("⤓  ", "⤓ "), background=theme.FIELD,
-                 foreground=theme.TEXT if not self.held else theme.MUTED, font=("Segoe UI", 11),
-                 justify="center", wraplength=260).grid(row=0, column=0, columnspan=2, sticky="we",
+        n = len(self.held)
+        text = (f"{n} files: Add item makes {n} document items with these settings" if self.multi()
+                else DROP_TEXT[self.form_kind()].replace("⤓  ", "⤓ "))
+        tk.Label(self.box, text=text, background=theme.FIELD, foreground=theme.TEXT if not self.held or self.multi()
+                 else theme.MUTED, font=("Segoe UI", 11, "bold" if self.multi() else "normal"),
+                 justify="center", wraplength=260).grid(row=0, column=0, sticky="we",
                                                         pady=(8 if not self.held else 0, 8 if not self.held else 4))
-        for k, path in enumerate(self.held):
-            tk.Label(self.box, text=f"📎 {Path(path).name}", background=theme.FIELD, foreground=theme.OK,
-                     font=("Segoe UI", 10), anchor="w", justify="left", wraplength=230).grid(
-                row=k + 1, column=0, sticky="we")
-            x = tk.Label(self.box, text="✕", background=theme.FIELD, foreground=theme.MUTED, cursor="hand2",
-                         font=("Segoe UI", 10, "bold"), padx=4)
-            x.grid(row=k + 1, column=1, sticky="e")
-            x.bind("<Button-1>", lambda _e, i=k: self.unhold(i))
+        if self.held:
+            line = 22
+            canvas = tk.Canvas(self.box, background=theme.FIELD, highlightthickness=0, borderwidth=0,
+                               height=min(n, self.BOX_ROWS) * line, width=260)
+            canvas.grid(row=1, column=0, sticky="we")
+            inner = tk.Frame(canvas, background=theme.FIELD)
+            inner.columnconfigure(0, weight=1)
+            item = canvas.create_window((0, 0), window=inner, anchor="nw")
+            canvas.bind("<Configure>", lambda e: canvas.itemconfigure(item, width=e.width))
+            inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+            if n > self.BOX_ROWS:
+                bar = ttk.Scrollbar(self.box, orient="vertical", command=canvas.yview)
+                bar.grid(row=1, column=1, sticky="ns")
+                canvas.configure(yscrollcommand=bar.set)
+                canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"))
+            self.box_files = canvas
+            for k, path in enumerate(self.held):
+                name = tk.Label(inner, text=f"📎 {Path(path).name}", background=theme.FIELD, foreground=theme.OK,
+                                font=("Segoe UI", 10), anchor="w", justify="left", height=1)
+                name.grid(row=k, column=0, sticky="we")
+                x = tk.Label(inner, text="✕", background=theme.FIELD, foreground=theme.MUTED, cursor="hand2",
+                             font=("Segoe UI", 10, "bold"), padx=4)
+                x.grid(row=k, column=1, sticky="e")
+                x.bind("<Button-1>", lambda _e, i=k: self.unhold(i))
+                if n > self.BOX_ROWS:
+                    for w in (name, x):
+                        w.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units"), add="+")
+        self.show_multi()
+
+    def show_multi(self):
+        """Several files: Pages says "from each file" and can't be typed, and colour is B&W or Colour only."""
+        entry, box, v = getattr(self, "pages_entry", None), getattr(self, "colour_box", None), self.option_vars
+        if self.form_kind() != "document" or entry is None or "pages" not in v:
+            return
+        try:
+            if self.multi():
+                v["pages"].set("from each file")
+                entry.state(["disabled"])
+                entry.config(width=14)
+                box.config(values=list(MULTI_COLOURS))
+                if COLOUR_CHOICES.get(v["color"].get()) == "mixed":
+                    v["color"].set("B&W")
+                    self.editor_error.config(text="Several files: colour pages can't be listed for them all, so "
+                                                  "Colour is B&W (or pick Colour).", style="Warn.TLabel")
+            else:
+                entry.state(["!disabled"])
+                entry.config(width=8)
+                if v["pages"].get() == "from each file":
+                    v["pages"].set(str(file_pages(self.held[0]) or "") if self.held else "1")
+                box.config(values=list(COLOUR_CHOICES))
+        except tk.TclError:
+            pass
+
+    def usable(self, paths, kind):
+        """(the files that can be taken, why the others can't): a folder, an empty file, over 200 MB, a file of a
+        type a document can't print, or a second copy of a file already here (2026-11-19_04: the rest are taken)."""
+        good, bad = [], []
+        for x in paths:
+            why = wo.drop_problem(x, kind)
+            if not why and same_file(x, good + self.held + [f for files in self.drops for f in files]):
+                why = f"{Path(x).name}: already added"
+            (bad if why else good).append(why or x)
+        return good, bad
 
     def drop_in_box(self, paths):
-        """Files dropped in the box: held for the item on the form (a document takes one: a new one replaces it).
-        A PDF for a document fills in Pages."""
+        """Files dropped in the box: held for the item on the form. A Document takes several (2026-11-19_04: Add item
+        makes one item per file); one PDF fills in Pages. Editing a document: several files make new items like it."""
         kind = self.form_kind()
-        if not check_drop(self.win, kind, paths):
-            return
-        if kind == "document":
-            self.held = [paths[0]]
-            pages = pdf_pages(paths[0])
-            if pages and "pages" in self.option_vars:
-                self.option_vars["pages"].set(str(pages))
-        else:
+        if kind == "product":
+            if not check_drop(self.win, kind, paths):
+                return
             self.held += [x for x in paths if x not in self.held]
+        else:
+            good, bad = self.usable(paths, "document")
+            if bad:
+                messagebox.showwarning(parent=self.win, title="ORCA", message="Not taken:\n" + "\n".join(bad)
+                                       + ("\n\nThe other files were taken." if good else ""))
+            if not good:
+                return
+            if self.editing is not None and len(good) > 1:
+                self.add_like(self.editing, good)
+                return
+            if self.editing is not None:
+                self.held = good
+            else:
+                self.held += good
+            if len(self.held) == 1:
+                pages = pdf_pages(self.held[0])
+                if pages and "pages" in self.option_vars:
+                    self.option_vars["pages"].set(str(pages))
         self.editor_error.config(text="")
         self.show_box()
         self.reprice()
+
+    def add_like(self, index, files):
+        """Files dropped onto a document item (or while editing it): asks once, then one new item per file with its
+        settings. The item keeps its own file; one with no file yet takes the first."""
+        files = list(files)
+        own = self.drops[index] if index < len(self.drops) else []
+        first = None if own else files.pop(0)
+        if files and not messagebox.askyesno(parent=self.win, title="ORCA",
+                                             message=f"Add {len(files)} more item{'s' if len(files) > 1 else ''} "
+                                                     f"like item {index + 1}?"):
+            return
+        if first:
+            self.drops[index] = [first]
+        self.make_items(dict(self.items[index]), files)
+        self.cancel_edit()
+        self.reprice()
+
+    def make_items(self, template, files):
+        """One document item per file, all with the template's settings; Pages from each file (a PDF's pages, an
+        image 1, an Office file counted in the background, else "type the pages")."""
+        template.pop("source_name", None)
+        template.pop("pages_unknown", None)
+        for path in files:
+            item = dict(template, source_name=Path(path).name)
+            pages = file_pages(path)
+            if pages:
+                item["pages"] = pages
+            else:
+                item["pages"], item["pages_unknown"] = 0, True
+                self.count_later(item, path)
+            self.items.append(item)
+            self.drops.append([path])
+
+    def count_later(self, item, path):
+        """An Office file's pages, counted on a thread; filled in (and repriced) when known, never freezing."""
+        box = {}
+
+        def run():
+            box["pages"] = count_pages(path, item["size"])
+
+        def wait():
+            if "pages" not in box:
+                self.win.after(200, wait)
+                return
+            if box["pages"] and any(it is item for it in self.items) and item.get("pages_unknown"):
+                item["pages"] = box["pages"]
+                item.pop("pages_unknown", None)
+                try:
+                    self.reprice()
+                except tk.TclError:
+                    pass
+
+        threading.Thread(target=run, daemon=True).start()
+        self.win.after(200, wait)
 
     def unhold(self, index):
         if 0 <= index < len(self.held):
             del self.held[index]
         self.show_box()
+        self.reprice()
 
     def what_changed(self):
         """A product's files kept when switching to Document: one file, of a type a document takes."""
@@ -1353,7 +1538,7 @@ class QuoteScreen(Screen):
                 if not t.isdigit() or int(t) < low:
                     raise ValueError(f"{name}: a whole number of {low} or more.")
                 return int(t)
-            item = {"kind": "document", "size": v["size"].get(), "pages": whole("pages", "Pages"),
+            item = {"kind": "document", "size": v["size"].get(), "pages": 1 if self.multi() else whole("pages", "Pages"),
                     "copies": whole("copies", "Copies"), "color": COLOUR_CHOICES[v["color"].get()],
                     "color_pages": v["color_pages"].get().strip(), "sides": SIDE_CHOICES[v["sides"].get()],
                     "per_side": int(v["per_side"].get()), "paper": v["paper"].get(),
@@ -1386,8 +1571,12 @@ class QuoteScreen(Screen):
         try:
             item = self.read_item()
         except ValueError as e:
-            self.editor_error.config(text=str(e))
+            self.editor_error.config(text=str(e), style="Bad.TLabel")
             return
+        if self.editing is not None and item["kind"] == "document":
+            old = self.items[self.editing]
+            if old.get("source_name") and self.held and Path(self.held[0]).name == old["source_name"]:
+                item["source_name"] = old["source_name"]  # still the file it was named after
         # An item the price list has no price for can't be added (prices are fixed: nobody types one).
         trial = list(self.items)
         index = len(trial) if self.editing is None else self.editing
@@ -1397,9 +1586,15 @@ class QuoteScreen(Screen):
         self.warn.config(text="\n".join(pl.warnings[:6]))  # the yellow line follows the file (missing, no prices yet)
         problems = [p[len(own):] for p in walkin_pricing.price_order(pl, trial)["problems"] if p.startswith(own)]
         if problems:
-            self.editor_error.config(text="\n".join(problems))
+            self.editor_error.config(text="\n".join(problems), style="Bad.TLabel")
             return
-        self.editor_error.config(text="")
+        self.editor_error.config(text="", style="Bad.TLabel")
+        if self.multi():  # several files: one item per file, with these settings (2026-11-19_04)
+            files = list(self.held)
+            self.make_items(item, files)
+            self.cancel_edit()
+            self.reprice()
+            return
         if self.editing is None:
             self.items.append(item)
             self.drops.append(list(self.held))  # the box's files go with the new item
@@ -1472,6 +1667,14 @@ class QuoteScreen(Screen):
             if i is None:
                 return
         kind = self.items[i]["kind"]
+        if kind == "document" and len(paths) > 1:  # several files: new items like this one (2026-11-19_04)
+            good, bad = self.usable(paths, "document")
+            if bad:
+                messagebox.showwarning(parent=self.win, title="ORCA", message="Not taken:\n" + "\n".join(bad)
+                                       + ("\n\nThe other files were taken." if good else ""))
+            if good:
+                self.add_like(i, good)
+            return
         if not check_drop(self.win, kind, paths):
             return
         if kind == "document" and self.drops[i]:
@@ -1518,9 +1721,11 @@ class QuoteScreen(Screen):
         self.tree.delete(*self.tree.get_children())
         self.drops = (self.drops + [[] for _ in self.items])[:len(self.items)]
         notes = []
+        self.tree.tag_configure("type_pages", foreground=theme.WARN)
         for i, (item, line) in enumerate(zip(self.items, self.priced["lines"])):
             text = walkin_pricing.describe(item)
-            self.tree.insert("", "end", iid=str(i), values=(i + 1, text, euro(line["price"])), open=True)
+            tags = ("type_pages",) if item.get("pages_unknown") else ()
+            self.tree.insert("", "end", iid=str(i), values=(i + 1, text, euro(line["price"])), open=True, tags=tags)
             for k, work in enumerate(line["working"][1:-1]):  # how the price is worked out (2026-11-17_08)
                 self.tree.insert(str(i), "end", iid=f"w:{i}:{k}", values=("", f"      {work}", ""), tags=("working",))
             for k, path in enumerate(self.drops[i] if i < len(self.drops) else []):
@@ -2299,8 +2504,15 @@ class SettingsDialog:
 
 # ------------------------------------------------------------------ Orders
 
+STATUS_TEXT = {"waiting": "Waiting for PDF", "ready_to_print": "Ready to print", "printed": "Printed",
+               "ready_for_pickup": "Ready for pickup", "collected": "Collected", "cancelled": "Cancelled"}
+
+
 class OrdersScreen(OrderList):
-    """Waiting for PDF, Ready to print (with printed ones), Ready for pickup; grouped by customer; search."""
+    """Waiting for PDF, Ready to print (with printed ones), Ready for pickup; grouped by customer; search.
+    2026-11-19_04 (Tesla: "just the order number and the customers details"): one line per order, the number, the
+    customer, the status and the date placed, with Details… (or a double-click) for the items, their files, drop
+    zones, Layout done and working lines (OrderDetailsScreen)."""
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Orders", on_back)
@@ -2334,15 +2546,9 @@ class OrdersScreen(OrderList):
                 ttk.Label(self.scroll.inner, text=name, style="Head.TLabel").grid(row=r, column=0, sticky="w", pady=(6, 2))
                 r += 1
                 for order in orders_of:
-                    box = self.card(self.scroll.inner, order, self.buttons(order))
-                    box.grid(row=r, column=0, sticky="we", pady=(0, 8))
                     where = self.ctx.print_queue.order_state(order) if order["status"] == "ready_to_print" else None
-                    if order["status"] == "printed":
-                        ttk.Label(box, text="Printed", style="Good.TLabel").grid(row=0, column=0, sticky="e")
-                        theme.on_surface(box)
-                    elif where:
-                        ttk.Label(box, text=where, style="Warn.TLabel").grid(row=0, column=0, sticky="e")
-                        theme.on_surface(box)
+                    box = self.line(self.scroll.inner, order, self.buttons(order), where)
+                    box.grid(row=r, column=0, sticky="we", pady=(0, 8))
                     r += 1
         if text.strip():
             history = [o for o in wo.list_history() if wo.matches(o, text)]
@@ -2350,21 +2556,51 @@ class OrdersScreen(OrderList):
                 row=r, column=0, sticky="w", pady=(12, 4))
             r += 1
             for order in sorted(history, key=lambda o: o["created"], reverse=True):
-                box = self.card(self.scroll.inner, order, [("Open folder", lambda o=order: self.open_folder(o), None)])
                 state = (f"Cancelled {when(order['times']['cancelled'])}" if order["status"] == "cancelled" else
-                         f"Collected {when(order['times']['collected'])}, paid {euro(order.get('paid') or 0)}")
-                ttk.Label(box, text=f"{customer_text(order['customer'])}  ·  {state}",
-                          style="Small.TLabel").grid(row=0, column=0, sticky="e")
-                theme.on_surface(box)
+                         f"Collected {when(order['times']['collected'])}")
+                box = self.line(self.scroll.inner, order, [("Open folder", lambda o=order: self.open_folder(o), None)],
+                                state, details=False)
                 box.grid(row=r, column=0, sticky="we", pady=(0, 8))
                 r += 1
 
+    def line(self, parent, order, buttons, state=None, details=True):
+        """One order: the number large, the customer, the status and the date placed; its buttons. No items, files,
+        drop zones, working lines or prices (those are in Details…)."""
+        box = ttk.Frame(parent, padding=(12, 8), style="Card.TFrame")
+        ttk.Style(box).configure("Card.TFrame", background=theme.SURFACE)
+        box.columnconfigure(2, weight=1)
+        number = ttk.Label(box, text=f"#{order['number']}", style="Number.TLabel")
+        ttk.Style(box).configure("Number.TLabel", font=("Segoe UI", 24, "bold"))
+        number.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 18))
+        who = ttk.Label(box, text=customer_text(order["customer"]), style="Head.TLabel")
+        who.grid(row=0, column=1, columnspan=2, sticky="w")
+        status = state or STATUS_TEXT.get(order["status"], order["status"])
+        info = ttk.Label(box, text=f"{status}   ·   placed {when(order['times'].get('placed') or order['created'])}",
+                         style="Good.TLabel" if order["status"] in ("printed", "ready_for_pickup") else "Small.TLabel")
+        info.grid(row=1, column=1, columnspan=2, sticky="w")
+        row = ttk.Frame(box)
+        row.grid(row=0, column=3, rowspan=2, sticky="e")
+        if details:
+            buttons = [("Details…", lambda: self.details(order), None)] + list(buttons)
+        for text, command, style in buttons:
+            ttk.Button(row, text=text, command=command, style=style or "TButton").pack(side="left", padx=(8, 0))
+        if details:
+            for w in (box, number, who, info):
+                w.bind("<Double-Button-1>", lambda _e: self.details(order))
+        theme.on_surface(box)
+        return box
+
+    def details(self, order):
+        """The order's items, files, drop zones, Layout done and working lines (as the list showed them before)."""
+        self.win.withdraw()
+        OrderDetailsScreen(self.ctx, order["number"], on_back=self.details_closed)
+
+    def details_closed(self):
+        self.signature = None  # the list updates
+        self.show()
+
     def buttons(self, order):
         out = [("Open folder", lambda: self.open_folder(order), None)]
-        for i, item in enumerate(order["items"]):
-            if (item["kind"] == "product" and wo.sheet_state(order, item)[0] in ("ok", "bad")
-                    and not wo.laid_out(order, item)):
-                out.insert(0, (f"Layout done (item {i + 1})…", lambda k=i: SheetsDialog(self, order, k), "Print.TButton"))
         if order["status"] == "printed":
             out.insert(0, ("Ready for pickup", lambda: self.ready_for_pickup(order), "Print.TButton"))
         out += [("Collected", lambda: self.collected(order), None),
@@ -2400,6 +2636,39 @@ class OrdersScreen(OrderList):
             messagebox.showwarning(parent=self.win, title="ORCA",
                                    message=f"Could not move or delete the order folder (is a file in it open?).\n\n{e}")
         self.signature = None
+
+
+class OrderDetailsScreen(OrderList):
+    """Details… of one open order (2026-11-19_04): its items as the Orders list showed them before, with their
+    files, drop zones, Layout done and working lines. Back (or the X) goes back to the list, which updates."""
+
+    def __init__(self, ctx, number, on_back):
+        super().__init__(ctx, f"Order #{number}", on_back)
+        self.number = number
+        self.ready()
+        self.poll()
+
+    def got_orders(self, orders):
+        pass  # the list's own poll keeps the print queue up to date
+
+    def fill(self, orders):
+        order = next((o for o in orders if o["number"] == self.number), None)
+        if order is None:
+            ttk.Label(self.scroll.inner, text=f"#{self.number} is no longer open (collected or cancelled).",
+                      style="Warn.TLabel").grid(row=0, column=0, sticky="w")
+            return
+        status = STATUS_TEXT.get(order["status"], order["status"])
+        self.status.config(text=f"{customer_text(order['customer'])}   ·   {status}")
+        box = self.card(self.scroll.inner, order, self.buttons(order))
+        box.grid(row=0, column=0, sticky="we")
+
+    def buttons(self, order):
+        out = [("Open folder", lambda: self.open_folder(order), None)]
+        for i, item in enumerate(order["items"]):
+            if (item["kind"] == "product" and wo.sheet_state(order, item)[0] in ("ok", "bad")
+                    and not wo.laid_out(order, item)):
+                out.insert(0, (f"Layout done (item {i + 1})…", lambda k=i: SheetsDialog(self, order, k), "Print.TButton"))
+        return out
 
 
 class SheetsDialog:

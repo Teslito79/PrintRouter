@@ -68,8 +68,9 @@ def describe(item):
     """One line for lists, the cover sheet and order.json."""
     if item["kind"] == "document":
         colour = {"bw": "B&W", "color": "colour", "mixed": f"colour pages {item.get('color_pages') or '-'}"}[item["color"]]
-        parts = [f"Document {item['size']}", f"{item['pages']} pages x {item['copies']}", colour,
-                 "both sides" if item["sides"] == "double" else "one side"]
+        pages = ("type the pages" if item.get("pages_unknown") else f"{item['pages']} pages") + f" x {item['copies']}"
+        parts = [f"Document {item['size']}"] + ([item["source_name"]] if item.get("source_name") else []) + [
+            pages, colour, "both sides" if item["sides"] == "double" else "one side"]
         if item.get("per_side", 1) > 1:
             parts.append(f"{item['per_side']} per side")
         parts.append(item["paper"])
@@ -302,6 +303,9 @@ def doc_counts(item):
 def _document(pl, item):
     need = Needs()
     c = doc_counts(item)
+    if item.get("pages_unknown"):  # several files dropped: ORCA couldn't count this one's pages (2026-11-19_04)
+        need.problems.append(f"type the pages of {item.get('source_name') or 'this file'} (Edit)")
+        return need
     if c["pages"] == 0:
         need.problems.append("no pages")
         return need
