@@ -472,8 +472,9 @@ class CopyCounterScreen(Screen):
 
     TYPE_NAMES = list(copy_counter.TYPES)
     HOW_HINTS = {
-        "sheets": "The copier counts B&W / colour, A4 / A3 and the sides by itself: pick only the paper.",
-        "pages": "The copier counts B&W / colour by itself: pick the size, the sides and the paper."}
+        "sheets": "The copier counts B&W / colour, A4 / A3 and the sides by itself. The paper is given at Finish.",
+        "pages": "The copier counts B&W / colour by itself: pick the size and the sides. The paper is given at "
+                 "Finish."}
 
     def __init__(self, ctx, on_back):
         super().__init__(ctx, "Copy counter", on_back, size="1500x900")
@@ -484,6 +485,7 @@ class CopyCounterScreen(Screen):
         self.finishing = set()
         self.reading = set()
         self.built_how = {}  # copier -> how its panel was built (a fallback while counting rebuilds it)
+        self.paper_live = {}  # copier -> the Paper used labels refresh_papers updates
         body = ttk.Frame(self.frame)
         body.grid(row=2, column=0, sticky="nsew", pady=(10, 0))
         self.frame.rowconfigure(2, weight=1)
@@ -597,19 +599,6 @@ class CopyCounterScreen(Screen):
                                 command=lambda: self.change(pid, type=f"{zvar.get()} B&W")).pack(side="left",
                                                                                                  padx=(0, 14))
             r += 1
-        pl = walkin_prices.current()
-        papers = [p for p in pl.papers if p != walkin_prices.LABEL_SHEET] or [copy_counter.FIRST_PAPER]
-        if copy_counter.FIRST_PAPER in papers:
-            papers.remove(copy_counter.FIRST_PAPER)
-            papers.insert(0, copy_counter.FIRST_PAPER)
-        row = ttk.Frame(box)
-        row.grid(row=r, column=0, sticky="w", pady=(6, 0))
-        ttk.Label(row, text="Paper:").pack(side="left")
-        pvar = tk.StringVar(value=d["current"]["paper"])
-        cb = ttk.Combobox(row, textvariable=pvar, values=papers, state="readonly", width=24, font=FONT)
-        cb.pack(side="left", padx=6)
-        cb.bind("<<ComboboxSelected>>", lambda _: self.change(pid, paper=pvar.get()))
-        r += 1
         if how != "sheets":  # with the sheets reading the copier counts one side / both sides by itself
             sides = ttk.Frame(box)
             sides.grid(row=r, column=0, sticky="w", pady=(6, 0))
@@ -671,17 +660,7 @@ class CopyCounterScreen(Screen):
             return
         d = counter.data
         try:
-            segs = counter.lines()
-            if d["mode"] == "counter" and not counter.current_copies():
-                if counter.how == "sheets":
-                    segs.append(f"{d['current']['paper']}: 0 copies so far")
-                elif counter.how == "pages":
-                    segs.append(f"{copy_counter.TYPES[d['current']['type']][0]}, {d['current']['paper']}, "
-                                f"{copy_counter.SIDES[d['current']['sides']]}: 0 copies so far")
-                else:
-                    segs.append(f"{d['current']['type']}, {d['current']['paper']}, "
-                                f"{copy_counter.SIDES[d['current']['sides']]}: 0 copies so far")
-            live["segs"].config(text="\n".join(segs) or "No copies yet")
+            live["segs"].config(text=counter.running_text())  # what the copier counted so far (2026-11-19_02)
             priced = counter.priced()
             live["total"].config(text=self.total_text(priced),
                                  style="Bad.TLabel" if priced["problems"] else "Head.TLabel")
@@ -730,13 +709,125 @@ class CopyCounterScreen(Screen):
         label.grid(row=r + 1, column=0, sticky="w", pady=(6, 0))
         return label
 
+    def papers(self):
+        """The price sheet's papers for the Paper used part, Smooth white 80 gsm first."""
+        pl = walkin_prices.current()
+        papers = [p for p in pl.papers if p != walkin_prices.LABEL_SHEET] or [copy_counter.FIRST_PAPER]
+        if copy_counter.FIRST_PAPER in papers:
+            papers.remove(copy_counter.FIRST_PAPER)
+            papers.insert(0, copy_counter.FIRST_PAPER)
+        return papers
+
+    def paper_block(self, box, r, pid, counter):
+        """Paper used (2026-11-19_02): one block per size with sheets. All on one paper (the default), or Different
+        papers: rows of paper + sheets, the first taking what is left, + Add paper, ✕; "28 of 28 A4 sheets given",
+        red when it doesn't add up."""
+        live = self.paper_live[pid] = {"first": {}, "given": {}}
+        papers = self.papers()
+        for size, total in counter.sheet_totals().items():
+            plan = counter.plan(size)
+            f = ttk.Frame(box)
+            f.grid(row=r, column=0, sticky="w", pady=(8, 0))
+            r += 1
+            ttk.Label(f, text=f"{size}: {total} sheet{'' if total == 1 else 's'}", style="Head.TLabel").grid(
+                row=0, column=0, columnspan=4, sticky="w")
+            mode = tk.StringVar(value="split" if plan["split"] else "one")
+            choice = ttk.Frame(f)
+            choice.grid(row=1, column=0, columnspan=4, sticky="w")
+            second = next((x for x in papers if x != plan["rows"][0][0]), None)
+            for value, text in (("one", "All on one paper"), ("split", "Different papers")):
+                ttk.Radiobutton(choice, text=text, value=value, variable=mode, command=lambda z=size, m=mode, x=second:
+                                self.paper_mode(pid, z, m.get() == "split", x)).pack(side="left", padx=(0, 14))
+            rows = counter.paper_rows(size)
+            for k, (paper, n) in enumerate(rows if plan["split"] else rows[:1]):
+                pvar = tk.StringVar(value=paper)
+                cb = ttk.Combobox(f, textvariable=pvar, values=papers, state="readonly", width=24, font=FONT)
+                cb.grid(row=2 + k, column=0, sticky="w", pady=2)
+                cb.bind("<<ComboboxSelected>>", lambda _e, z=size, i=k, v=pvar: self.paper_set(pid, z, i, paper=v.get()))
+                if not plan["split"]:
+                    continue
+                if k == 0:  # takes whatever is left: filled in by itself, never typed
+                    live["first"][size] = ttk.Label(f, text=str(n), width=6)
+                    live["first"][size].grid(row=2 + k, column=1, sticky="w", padx=6)
+                else:
+                    nvar = tk.StringVar(value=str(n))
+                    ttk.Entry(f, textvariable=nvar, width=6, font=FONT).grid(row=2 + k, column=1, sticky="w", padx=6)
+                    nvar.trace_add("write", lambda *_a, z=size, i=k, v=nvar: self.paper_typed(pid, z, i, v.get()))
+                    ttk.Button(f, text="✕", width=3, command=lambda z=size, i=k: self.paper_remove(pid, z, i)).grid(
+                        row=2 + k, column=2, sticky="w")
+            if plan["split"]:
+                ttk.Button(f, text="+ Add paper", command=lambda z=size: self.paper_add(pid, z)).grid(
+                    row=2 + len(rows), column=0, sticky="w", pady=(4, 0))
+            live["given"][size] = ttk.Label(f, text="")
+            live["given"][size].grid(row=3 + len(rows), column=0, columnspan=4, sticky="w", pady=(2, 0))
+        self.refresh_papers(pid)
+        return r
+
+    def refresh_papers(self, pid):
+        """While a paper's sheets are typed: the first row, the "x of y given" lines, the total and the buttons,
+        without building the panel again (so the typing isn't lost)."""
+        counter, live = self.manager.counters.get(pid), self.paper_live.get(pid)
+        if counter is None or not live:
+            return
+        try:
+            totals = counter.sheet_totals()
+            for size, label in live["first"].items():
+                label.config(text=str(counter.paper_rows(size)[0][1]))
+            for size, label in live["given"].items():
+                given, total = counter.given(size), totals.get(size, 0)
+                label.config(text=f"{given} of {total} {size} sheets given",
+                             style="Good.TLabel" if given == total else "Bad.TLabel")
+            priced = counter.priced()
+            if "lines" in live:
+                live["lines"].config(text="\n".join(f"{t}   {euro(a)}" for t, a in priced["lines"]) or "No copies")
+            if "total" in live:
+                live["total"].config(text=self.total_text(priced),
+                                     style="Bad.TLabel" if priced["problems"] else "Head.TLabel")
+            for b in live.get("buttons", []):
+                b.state(["disabled"] if priced["problems"] else ["!disabled"])
+        except tk.TclError:
+            pass
+
+    def paper_mode(self, pid, size, split, second):
+        self.manager.counters[pid].set_split(size, split, second)
+        self.build(pid)
+
+    def paper_set(self, pid, size, index, paper):
+        self.manager.counters[pid].set_row(size, index, paper=paper)
+        self.refresh_papers(pid)
+
+    def paper_typed(self, pid, size, index, text):
+        text = text.strip()
+        self.manager.counters[pid].set_row(size, index, sheets=int(text) if text.isdigit() else 0)
+        self.refresh_papers(pid)
+
+    def paper_add(self, pid, size):
+        counter = self.manager.counters[pid]
+        used = {x for x, _ in counter.paper_rows(size)}
+        counter.add_row(size, next((x for x in self.papers() if x not in used), self.papers()[0]))
+        self.build(pid)
+
+    def paper_remove(self, pid, size, index):
+        self.manager.counters[pid].remove_row(size, index)
+        self.build(pid)
+
+    def back_to_counting(self, pid):
+        """The customer makes more copies after Finish: counting again, the papers given kept."""
+        self.manager.counters[pid].reopen()
+        self.messages.pop(pid, None)
+        self.build(pid)
+
     def build_summary(self, box, pid, counter, message):
         priced = counter.priced()
         ttk.Label(box, text="Finished", style="Big.TLabel").grid(row=0, column=0, sticky="w")
-        lines = "\n".join(f"{t}   {euro(a)}" for t, a in priced["lines"]) or "No copies"
-        self.panel_label(box, 1, lines)
-        self.total_block(box, 2, pid, counter, priced)
-        r = 4
+        ttk.Label(box, text=counter.running_text(), justify="left", wraplength=440).grid(row=1, column=0, sticky="w")
+        if counter.sheet_totals():
+            ttk.Label(box, text="Paper used", style="Head.TLabel").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        r = self.paper_block(box, 3, pid, counter)
+        live = self.paper_live[pid]
+        live["lines"] = self.panel_label(box, r, "\n".join(f"{t}   {euro(a)}" for t, a in priced["lines"]) or "No copies")
+        live["total"] = self.total_block(box, r + 1, pid, counter, priced)
+        r += 3
         if message:
             ttk.Label(box, text=message, style="Bad.TLabel", wraplength=420, justify="left").grid(
                 row=r, column=0, sticky="w", pady=(4, 0))
@@ -749,10 +840,12 @@ class CopyCounterScreen(Screen):
             pr.pack(side="left", padx=(0, 8))
         dn = ttk.Button(buttons, text="Done", style="Print.TButton", command=lambda: self.done(pid))
         dn.pack(side="left")
+        ttk.Button(buttons, text="Back to counting", command=lambda: self.back_to_counting(pid)).pack(
+            side="left", padx=(8, 0))
+        live["buttons"] = [b for b in (pr, dn) if b is not None]
         if priced["problems"]:
-            for b in (pr, dn):
-                if b is not None:
-                    b.state(["disabled"])
+            for b in live["buttons"]:
+                b.state(["disabled"])
 
     # -------------------------------------------------------------- actions
     def start(self, pid, typed=False):

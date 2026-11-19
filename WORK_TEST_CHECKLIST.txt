@@ -57,7 +57,11 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    1 sheet (one side)". While it counts, a walk-in order can still print on the IM C4510 and doesn't
    change the count. Finish, then Print receipt: it prints on the XP-80C with the date, the copier and
    the lines, no shop name and (for now) no prices. Done.
-   Then on the MP C3004: Start counting (it says "pick the size, the sides and the paper"), make 1 B&W
+   Papers at Finish: Start counting again, copy 10 sheets on 100 gsm and 10 sheets on 200 gsm. At
+   Finish pick "Different papers": set the first row to the 100 gsm paper, add the 200 gsm paper with
+   10 sheets (the first row shows 10 by itself, "20 of 20 A4 sheets given"). Print receipt: it lists
+   both papers. Done.
+   Then on the MP C3004: Start counting (it says "pick the size and the sides"), make 1 B&W
    and 1 colour A4 copy: it shows 1 A4 B&W and 1 A4 colour by itself. Cancel.
 13. Settings: open Settings from the menu with the Prices password. It shows the three copiers
    (IM C4510, IM C3000, MP C3004) with their Windows printers, none in red, and Which printer does

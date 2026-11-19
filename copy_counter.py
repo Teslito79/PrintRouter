@@ -9,6 +9,11 @@ name, money only while rules.json walkin_paper_prices is true) and Done (the sal
 print_log.csv line per segment, the copier let go). Cancel throws it all away. A running counter is saved in
 Walk-in\\Open\\copy_counter.json and goes on after a restart.
 
+The paper is given at Finish, not while copying (2026-11-19_02, Tesla: "its a counter why should i pick ..."): one
+count from Start to Finish, then a "Paper used" part per size with sheets: all on one paper (Smooth white 80 gsm
+first), or split over several papers whose first row takes what is left. Back to counting reopens it, keeping
+what was given. Old saved counts whose segments name their paper still price that paper.
+
 read(copier) is the one place the counter is read (2026-11-18_01). It first reads the copier's own counter page
 (counter_page.py, getUnificationCounter.cgi):
 - "sheets" (IM C4510, IM C3000): the Copier section's sheets by colour, size and simplex / duplex. The copier splits
@@ -43,6 +48,8 @@ STABLE_GIVE_UP = 30  # …or the last read is used after this long
 LOCK = threading.RLock()
 FALLBACK_GAP = 500  # a fallback goes on from the last page reading's Total Counter when the SNMP total is this close
 FALLBACK_TEXT = "Counting from the total counter: pick the copy type"
+PLAIN_PAPERS = ("Smooth white 80 gsm", "Normal 80 gsm")  # left off the receipt unless it shows money
+SIZES = ("A4", "A3")
 COLOUR_WORDS = (("bw", "B&W"), ("color", "colour"))
 SIZE_KEYS = (("A4", "s_other", "d_other"), ("A3", "s_a3", "d_a3"))
 
@@ -171,6 +178,7 @@ class Counter:
     def __init__(self, manager, copier, data):
         self.manager, self.copier, self.data = manager, copier, data
         data.setdefault("how", "total")
+        data.setdefault("papers", {})  # size -> {"split": bool, "rows": [[paper, sheets or None (the first)], ...]}
 
     @property
     def rules(self):
@@ -273,10 +281,10 @@ class Counter:
         self.manager.save()
 
     def _entries(self, reading):
-        """counted() with the paper (and, in pages mode, Other Function(s) at both ends, recorded only)."""
+        """counted() (and, in pages mode, Other Function(s) at both ends, recorded only). No paper: it is given at
+        Finish (2026-11-19_02)."""
         out = []
         for e in self.counted(reading):
-            e["paper"] = self.data["current"]["paper"]
             if self.how == "pages":
                 e["other"] = {"start": self.data["start"].get("other"), "end": reading.get("other")}
             out.append(e)
@@ -291,11 +299,12 @@ class Counter:
                 self.data["segments"].append(dict(e, group=group))
 
     def add_typed(self, copies):
-        """Type the copies instead (the copier didn't answer): a segment of the chosen type, paper and sides."""
+        """Type the copies instead (the copier didn't answer): a segment of the chosen type and sides."""
         copies = int(copies)
         if copies < 1:
             raise ValueError("Copies: a whole number of 1 or more.")
-        self.data["segments"].append(dict(self.data["current"], copies=copies))
+        cur = self.data["current"]
+        self.data["segments"].append({"type": cur["type"], "sides": cur["sides"], "copies": copies})
         self.manager.save()
 
     def add_extra(self, name, count, per_copy=None):
@@ -349,10 +358,96 @@ class Counter:
         self.manager.save()
         return steady
 
+    def reopen(self):
+        """Back to counting after Finish (the customer makes more copies): the papers given are kept."""
+        self.data["finished"] = False
+        self.data["last_time"] = now()
+        self.manager.save()
+
+    # -------------------------------------------------------------- the paper, given at Finish
+    def unpapered(self):
+        """The counted copies whose paper is given at Finish (old saved segments name their own)."""
+        return [seg for seg in self.segments_now() if not seg.get("paper")]
+
+    def sheet_totals(self):
+        """{size: sheets} of the copies whose paper is given at Finish, A4 first."""
+        out = {}
+        for seg in self.unpapered():
+            size = TYPES[seg["type"]][0]
+            out[size] = out.get(size, 0) + sheets_of(seg)
+        return {size: out[size] for size in SIZES if out.get(size)}
+
+    def plan(self, size):
+        return self.data.setdefault("papers", {}).setdefault(size, {"split": False, "rows": [[FIRST_PAPER, None]]})
+
+    def paper_rows(self, size):
+        """[(paper, sheets)] for a size: all of them on one paper, or the rows given, the first taking what is left."""
+        total = self.sheet_totals().get(size, 0)
+        plan = self.plan(size)
+        if not plan["split"]:
+            return [(plan["rows"][0][0], total)]
+        others = [(paper, int(n or 0)) for paper, n in plan["rows"][1:]]
+        return [(plan["rows"][0][0], max(0, total - sum(n for _, n in others)))] + others
+
+    def given(self, size):
+        return sum(n for _, n in self.paper_rows(size))
+
+    def paper_problems(self):
+        """A size whose papers don't add up to its sheets: Print receipt and Done wait for it."""
+        return [f"{size}: {self.given(size)} of {total} sheets given" for size, total in self.sheet_totals().items()
+                if self.given(size) != total]
+
+    def set_split(self, size, split, second=None):
+        """All on one paper (False) or Different papers (True: a second row to type, if there is none)."""
+        plan = self.plan(size)
+        plan["split"] = bool(split)
+        if split and len(plan["rows"]) == 1 and second:
+            plan["rows"].append([second, 0])
+        self.manager.save()
+
+    def set_row(self, size, index, paper=None, sheets=None):
+        rows = self.plan(size)["rows"]
+        if 0 <= index < len(rows):
+            if paper is not None:
+                rows[index][0] = paper
+            if sheets is not None and index > 0:
+                rows[index][1] = max(0, int(sheets))
+        self.manager.save()
+
+    def add_row(self, size, paper):
+        self.plan(size)["rows"].append([paper, 0])
+        self.manager.save()
+
+    def remove_row(self, size, index):
+        rows = self.plan(size)["rows"]
+        if 0 < index < len(rows):
+            del rows[index]
+        if len(rows) == 1:
+            self.plan(size)["split"] = False
+        self.manager.save()
+
+    def papers_now(self):
+        """{size: [(paper, sheets)]} as given (rows with 0 sheets dropped)."""
+        return {size: [(paper, n) for paper, n in self.paper_rows(size) if n > 0] for size in self.sheet_totals()}
+
+    def running_text(self):
+        """While counting: "A4 B&W 34, A4 colour 6, A3 colour 1 copies, on 28 A4 + 1 A3 sheets"."""
+        copies = {}
+        for seg in self.segments_now():
+            copies[seg["type"]] = copies.get(seg["type"], 0) + seg["copies"]
+        if not copies:
+            return "No copies yet"
+        sheets = self.sheet_totals()
+        text = ", ".join(f"{kind} {copies[kind]}" for kind in TYPES if copies.get(kind)) + " copies"
+        if sheets:
+            text += ", on " + " + ".join(f"{n} {size}" for size, n in sheets.items()) + " sheets"
+        return text
+
     # -------------------------------------------------------------- texts and prices
     def segment_text(self, seg):
         n = seg['copies']
-        return f"{seg['type']}, {seg['paper']}, {SIDES[seg['sides']]}: {n} cop{'y' if n == 1 else 'ies'}"
+        paper = f", {seg['paper']}" if seg.get("paper") else ""
+        return f"{seg['type']}{paper}, {SIDES[seg['sides']]}: {n} cop{'y' if n == 1 else 'ies'}"
 
     def segments_now(self):
         """The segments, with the running one while counting."""
@@ -370,7 +465,7 @@ class Counter:
             if seg.get("sheets") is None:
                 out.append(self.segment_text(seg))
                 continue
-            key = (seg.get("group"), seg["type"], seg["paper"])
+            key = (seg.get("group"), seg["type"], seg.get("paper"))
             if key not in grouped:
                 grouped[key] = {"copies": 0, "sheets": 0, "single": 0, "double": 0}
                 out.append(key)
@@ -381,11 +476,18 @@ class Counter:
         return [line if isinstance(line, str) else auto_text(line[1], line[2], grouped[line]) for line in out]
 
     def priced(self, pl=None):
-        return price(pl or walkin_prices.current(), self.segments_now(), self.data["extras"], self.data.get("rounding"))
+        return price(pl or walkin_prices.current(), self.segments_now(), self.data["extras"], self.data.get("rounding"),
+                     self.papers_now(), self.paper_problems())
 
     def short(self):
-        """'A4 B&W one side x 37; A4 colour one side x 5; Staple x 2' for the sales list."""
-        parts = [f"{s['type']} {SIDES[s['sides']]} x {s['copies']}" for s in self.data["segments"]]
+        """'A4 B&W x 34; A4 colour x 6; Silk 200 gsm A4 x 10; Staple x 2' for the sales list."""
+        copies = {}
+        for seg in self.data["segments"]:
+            copies[seg["type"]] = copies.get(seg["type"], 0) + seg["copies"]
+        parts = [f"{kind} x {copies[kind]}" for kind in TYPES if copies.get(kind)]
+        for (paper, size), n in paper_sheets(self.data["segments"], self.papers_now()).items():
+            if paper not in PLAIN_PAPERS:
+                parts.append(f"{paper} {size} x {n}")
         parts += [f"{e['name']} x {e['count']}" for e in self.data["extras"]]
         return "; ".join(parts)
 
@@ -397,7 +499,25 @@ def auto_text(kind, paper, g):
         sides = f"{g['single']} one side, {g['double']} both sides"
     else:
         sides = "one side" if g["single"] else "both sides"
-    return f"{kind}: {copies} on {sheets} ({sides}), {paper}"
+    return f"{kind}: {copies} on {sheets} ({sides})" + (f", {paper}" if paper else "")
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def paper_sheets(segments, papers):
+    """{(paper, size): sheets}: old segments naming their paper, then the papers given at Finish."""
+    out = {}
+    for seg in segments:
+        if seg.get("paper"):
+            key = (seg["paper"], TYPES[seg["type"]][0])
+            out[key] = out.get(key, 0) + sheets_of(seg)
+    for size, rows in (papers or {}).items():
+        for paper, n in rows:
+            if n:
+                out[(paper, size)] = out.get((paper, size), 0) + n
+    return out
 
 
 def sheets_of(seg):
@@ -416,29 +536,35 @@ def extra_rows(pl):
     return rows
 
 
-def price(pl, segments, extras, rounding=None):
-    """{"lines": [(text, amount)], "volume", "total", "due", "rounding", "problems"} for a receipt."""
-    lines, problems = [], []
+def price(pl, segments, extras, rounding=None, papers=None, paper_problems=()):
+    """{"lines": [(text, amount)], "plain": texts left off a receipt without money, "volume", "total", "due",
+    "rounding", "problems"} for a receipt. Copies by size and colour (tiers over this receipt); the paper: sheets x
+    each paper's price (papers: {size: [(paper, sheets)]} given at Finish; old segments name their own)."""
+    lines, problems, plain = [], list(paper_problems), []
     counts = {}
     for seg in segments:
         key = TYPES[seg["type"]]
         counts[key] = counts.get(key, 0) + seg["copies"]
     tiers = {key: pl.tier_of(n) for key, n in counts.items()}
-    for seg in segments:
-        size, colour = TYPES[seg["type"]]
+    for kind, (size, colour) in TYPES.items():
+        n = counts.get((size, colour))
+        if not n:
+            continue
         tier = tiers[(size, colour)]
         rate = pl.copies[(size, colour)][tier - 1]
-        text = f"{seg['type']} {SIDES[seg['sides']]} x {seg['copies']}"
         if rate is None:
             problems.append(P.no_price(f"{size} {P.COLOUR_WORD[colour]} copies, Tier {tier}"))
         else:
-            lines.append((text, P.r2(seg["copies"] * rate)))
-        sheets = sheets_of(seg)
-        paper = pl.papers.get(pl.paper_row(seg["paper"]), {}).get(size)
-        if paper is None:
-            problems.append(P.no_price(f"{pl.paper_row(seg['paper'])}, {size} sheet"))
-        else:
-            lines.append((f"Paper {seg['paper']} x {sheets}", P.r2(sheets * paper)))
+            lines.append((f"{kind}: {n}", P.r2(n * rate)))
+    for (paper, size), n in paper_sheets(segments, papers).items():
+        price_ = pl.papers.get(pl.paper_row(paper), {}).get(size)
+        text = f"{paper}: {_plural(n, size + ' sheet')}"
+        if price_ is None:
+            problems.append(P.no_price(f"{pl.paper_row(paper)}, {size} sheet"))
+            continue
+        lines.append((text, P.r2(n * price_)))
+        if paper in PLAIN_PAPERS:
+            plain.append(text)
     for e in extras:
         name, n = e["name"], e["count"]
         if name.startswith("Lamination"):
@@ -479,8 +605,9 @@ def price(pl, segments, extras, rounding=None):
     if adjust:
         lines.append(("Volume price (never more for fewer copies)", adjust))
     total = P.r2(sum(a for _, a in lines))
-    return {"lines": lines, "volume": adjust, "total": total, "rounding": rounding if rounding in P.ROUNDINGS else None,
-            "due": P.rounded(total, rounding), "problems": problems}
+    return {"lines": lines, "plain": plain, "volume": adjust, "total": total,
+            "rounding": rounding if rounding in P.ROUNDINGS else None, "due": P.rounded(total, rounding),
+            "problems": problems}
 
 
 # ------------------------------------------------------------------ every copier
@@ -553,15 +680,50 @@ class Manager:
             raise ValueError("\n".join(priced["problems"]))
         wo.write_sales_line({"date": now()[:10], "order": "", "status": "copied", "items": c.short(),
                              "paid": f"{priced['due']:.2f}", "source": "copy counter", "copier": self.label(pid)})
-        log_segments(self.rules, self.label(pid), c.data["segments"])
+        log_segments(self.rules, self.label(pid), c.data["segments"], c.papers_now())
         self.counters.pop(pid, None)
         self.save()
         copier_queue.release(pid)
         return priced
 
 
-def log_segments(rules, label, segments):
-    """print_log.csv: one line per segment, source walk-in, order "copy counter" (the Counter counts it as Walk-in)."""
+def log_lines(segments, papers):
+    """print_log.csv lines: [(size, colour, copies, sheets, sides, paper)]. Old segments naming their paper: one each.
+    The rest: one line per size and colour, split over the papers given for that size by their sheets, in the order
+    given (B&W first, then colour); a line's copies are its share of that colour's copies by sheets, rounded, the
+    last share taking what is left, so the copies always add up."""
+    out = []
+    for seg in segments:
+        if seg.get("paper"):
+            size, colour = TYPES[seg["type"]]
+            out.append((size, colour, seg["copies"], sheets_of(seg), seg["sides"], seg["paper"]))
+    for size in SIZES:
+        buckets = []
+        for colour in ("bw", "color"):
+            mine = [seg for seg in segments if not seg.get("paper") and TYPES[seg["type"]] == (size, colour)]
+            if mine:
+                buckets.append((colour, sum(x["copies"] for x in mine), sum(sheets_of(x) for x in mine)))
+        rows = [[paper, n] for paper, n in (papers or {}).get(size, []) if n > 0] or [[FIRST_PAPER, 0]]
+        r = 0
+        for colour, copies, sheets in buckets:
+            left_sheets, left_copies = sheets, copies
+            while left_sheets > 0:
+                paper, avail = rows[r]
+                take = min(left_sheets, avail) if avail > 0 else left_sheets
+                last = take == left_sheets
+                n = left_copies if last else round(copies * take / sheets)
+                out.append((size, colour, n, take, "double" if n > take else "single", paper))
+                left_sheets -= take
+                left_copies -= n
+                rows[r][1] = avail - take
+                if rows[r][1] <= 0 and r < len(rows) - 1:
+                    r += 1
+    return out
+
+
+def log_segments(rules, label, segments, papers=None):
+    """print_log.csv: one line per size and colour (log_lines), source walk-in, order "copy counter" (the Counter
+    counts it as Walk-in)."""
     import jobs
     p = routing.app_dir() / jobs.LOG_FILE
     try:
@@ -571,13 +733,11 @@ def log_segments(rules, label, segments):
             w = csv.writer(f)
             if new:
                 w.writerow(jobs.LOG_COLUMNS)
-            for seg in segments:
-                size, colour = TYPES[seg["type"]]
-                n, sheets = seg["copies"], sheets_of(seg)
+            for size, colour, n, sheets, sides, paper in log_lines(segments, papers):
                 w.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"copy counter {label}", n, 1,
-                            "color" if colour == "color" else "bw", "double" if seg["sides"] == "double" else "single",
-                            size, "", "", "", label, "copy counter", sheets, "", "walk-in", "copy counter", "Copies",
-                            n, size, n if colour == "color" else 0, n if colour == "bw" else 0, seg["paper"]])
+                            "color" if colour == "color" else "bw", sides, size, "", "", "", label, "copy counter",
+                            sheets, "", "walk-in", "copy counter", "Copies", n, size, n if colour == "color" else 0,
+                            n if colour == "bw" else 0, paper])
     except OSError:
         pass  # the log must never stop the sale
 
@@ -591,8 +751,8 @@ def receipt_rows(counter, priced, prices_on, when=None):
     header = [when.strftime("%d/%m/%Y  %H:%M"), counter.manager.label(counter.copier)]
     rows = []
     for text, amount in priced["lines"]:
-        if text.startswith("Volume price") and not prices_on:
-            continue
+        if not prices_on and (text.startswith("Volume price") or text in priced.get("plain", [])):
+            continue  # without money: copies, the papers that aren't plain, the extras
         rows.append((text, f"{amount:.2f}" if prices_on else ""))
     total = None
     if prices_on:
