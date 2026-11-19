@@ -49,7 +49,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    lines under each item and its prices must match your paper sums.
 12. Copy counter (it now reads the copier's counter page and splits the copies by itself):
    Walk-in > Copy counter, Start counting on the IM C4510. The panel must say "The copier counts B&W /
-   colour, A4 / A3 and the sides by itself: pick only the paper", with no copy type or sides buttons (if
+   colour, A4 / A3 and the sides by itself. The paper is given at Finish.", with no paper, copy type or sides buttons (if
    it shows the yellow "Counting from the total counter: pick the copy type", the page wasn't read: note
    that). Press nothing and make 2 A4 B&W copies, 1 A3 colour copy, then 2 A4 B&W copies both sides.
    Within a few seconds the panel shows A4 B&W 2 copies on 2 sheets (one side) + 4 copies on 2 sheets
