@@ -230,6 +230,31 @@ class Snmp:
 
 # ------------------------------------------------------------------ reading a copier
 
+FRESH_MINUTES = 30  # only a good reading this recent counts for routing (2026-11-19_07)
+
+
+def out_of_toner(watch, now=None):
+    """{printer: set of empty toners} from the newest good readings (2026-11-19_07): a toner at 0 (the copier's -2
+    counts as 0, 19_06). A reading older than FRESH_MINUTES, a failed one or none: fine (never guess). A toner
+    put in by hand or found changed after that reading: fine until the next reading."""
+    now = now or datetime.datetime.now()
+    out = {}
+    try:
+        changes = read_changes()
+    except Exception:
+        changes = []
+    for pid, r in list(getattr(watch, "latest", {}).items()):
+        when = r.get("time")
+        if not r.get("ok") or not isinstance(when, datetime.datetime) or now - when > datetime.timedelta(
+                minutes=FRESH_MINUTES):
+            continue
+        empty = {c for c, level in (r.get("toners") or {}).items() if level == 0}
+        empty -= {c["colour"] for c in changes if c["copier"] == pid and c["time"] > when}
+        if empty:
+            out[pid] = empty
+    return out
+
+
 def queue_address(queue):
     """The copier's network address from its Windows queue's TCP/IP port (the port's host address,
     as PowerShell's PrinterHostAddress; port names can be out of date), or None. Reading only."""
@@ -920,6 +945,9 @@ class TonersScreen:
         else:
             state, red = "No answer" + (f" · last good reading {good:%d/%m %H:%M}" if good else ""), True
         ttk.Label(f, text=state, foreground=theme.ERROR if red else theme.MUTED).pack(anchor="w")
+        out_line = self.out_text(pid)
+        if out_line:  # 2026-11-19_07: jobs go around a copier that is out of toner
+            ttk.Label(f, text=out_line, foreground=theme.ERROR, wraplength=360, justify="left").pack(anchor="w")
         line = ttk.Frame(f)
         line.pack(anchor="w", fill="x", pady=(0, 8))
         address = (r or {}).get("address")
@@ -954,6 +982,25 @@ class TonersScreen:
             if warn:
                 ttk.Label(line, text=warn, foreground=theme.ERROR, font=("Segoe UI", 9, "bold")).pack(
                     side="left", padx=(5, 0))
+
+    def out_text(self, pid):
+        """"Out of yellow toner: colour jobs go to IM C4510" (2026-11-19_07), or ""."""
+        if self.rules.get("avoid_empty_toner", True) is False:
+            return ""
+        empty = out_of_toner(self.watch).get(pid)
+        if not empty:
+            return ""
+        no_toner = out_of_toner(self.watch)
+        if "black" in empty:
+            what, job = "black", {"color": False, "paper": "A4"}
+            kind = "jobs"
+        else:
+            colours = [c for c in routing.COLOUR_TONERS if c in empty]
+            what = colours[0] if len(colours) == 1 else ", ".join(colours[:-1]) + " and " + colours[-1]
+            job, kind = {"color": True, "paper": "A4"}, "colour jobs"
+        target = routing.move_target(self.rules, pid, job, no_toner)
+        where = f"go to {self.printers[target]['label']}" if target else "stay here (no other copier can take them)"
+        return f"Out of {what} toner: {kind} {where}"
 
     # -------------------------------------------------------------- buttons
 

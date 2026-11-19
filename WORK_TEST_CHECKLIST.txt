@@ -82,3 +82,6 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
 17. When the IM C3000's new yellow toner goes in: within 10 minutes (or press Read now on the Data
    screen) Data records the change by itself (Yellow, automatic) and takes one spare yellow off. If it
    doesn't, press Toner replaced for it.
+18. Out of toner: while the IM C3000 has no yellow (Data shows "Empty" and "Out of yellow toner:
+   colour jobs go to IM C4510"), add a colour flyer or a colour document on Silk paper in Add Email.
+   Print Jobs shows it going to the IM C4510 with "IM C3000 is out of yellow toner: sent to IM C4510".

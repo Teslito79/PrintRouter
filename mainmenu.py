@@ -60,6 +60,8 @@ class MainMenu:
         # Copier counters and toner levels, read at start and every 10 minutes (toners.py).
         self.toners = toners.TonerWatch(self.rules)
         self.toners.start()
+        # Jobs go around a copier that is out of toner (2026-11-19_07): routing asks the Data screen's readings.
+        self.jobs.toner_source = lambda: toners.out_of_toner(self.toners)
         # Walk-in orders: their files are checked in the background; the print queue (one customer at a time per
         # copier, Start / Stop printing orders, Pages collected) lives here, so it carries on behind other screens.
         self.preparer = walkin_print.Preparer()

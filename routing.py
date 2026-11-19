@@ -21,7 +21,7 @@ def load_json(name):
 # this PC into settings.json next to it (local, gitignored), laid over rules.json by load_rules(), the one loader.
 SETTINGS = "settings.json"
 LOCAL_KEYS = ("printers", "rules", "fallback_printer", "receipt_printer", "walkin_paper_prices", "copy_counter",
-              "rotate_sort")
+              "rotate_sort", "avoid_empty_toner")
 COPY_COUNTER_KEYS = {"a3_counts_as": "copy_counter_a3_counts_as", "poll_seconds": "copy_counter_poll_seconds"}
 
 
@@ -207,7 +207,26 @@ def max_gsm(rules, printer_id):
     return rules["printers"].get(printer_id, {}).get("max_gsm")
 
 
-def choose_printer(rules, job, busy=(), missing=()):
+COLOUR_TONERS = ("cyan", "magenta", "yellow")
+
+
+def toner_why(rules, printer_id, job, no_toner):
+    """Why this printer can't print the job for lack of toner (2026-11-19_07), or None: out of black (any job), out
+    of a colour toner (colour jobs; mixed jobs count as colour). no_toner: {printer: set of empty toners}."""
+    out = set((no_toner or {}).get(printer_id) or ())
+    if not out:
+        return None
+    label = rules["printers"].get(printer_id, {}).get("label", printer_id)
+    if "black" in out:
+        return f"{label} is out of black toner"
+    colours = [c for c in COLOUR_TONERS if c in out]
+    if job.get("color") and colours:
+        names = colours[0] if len(colours) == 1 else ", ".join(colours[:-1]) + " and " + colours[-1]
+        return f"{label} is out of {names} toner"
+    return None
+
+
+def choose_printer(rules, job, busy=(), missing=(), no_toner=None):
     """Return (printer_id, reason) for a job.
 
     job keys: color, content ('document'/'pictures'), duplex, paper, paper_type, tray, product, gsm.
@@ -215,22 +234,36 @@ def choose_printer(rules, job, busy=(), missing=()):
     A paper heavier than the chosen copier's max_gsm goes to the first copier that takes it.
     missing: printers not installed on this PC (Settings: "Not found"); skipped like a busy one, and so are printers
     that can't take the job (unable: B&W only, A4 only), when another printer can (2026-11-18_02).
+    no_toner: {printer: set of empty toners} from the Data screen (toners.out_of_toner, 2026-11-19_07): a colour job
+    leaves a copier out of a colour toner, any job one out of black, for the next printer that can take it; with
+    nowhere to go it stays, and the reason says the toner is out. None or {}: as before.
     """
     printer_id, reason = _choose(rules, job, busy, missing)
     gsm = job.get("gsm")
 
     def fits(pid):
         limit = max_gsm(rules, pid)
-        return not unable(rules, pid, job) and pid not in missing and not (gsm and limit and gsm > limit)
+        return (not unable(rules, pid, job) and pid not in missing and not (gsm and limit and gsm > limit)
+                and not toner_why(rules, pid, job, no_toner))
 
-    if (unable(rules, printer_id, job) or printer_id in missing) and not fits(printer_id):
+    empty = toner_why(rules, printer_id, job, no_toner)
+    if (unable(rules, printer_id, job) or printer_id in missing or empty) and not fits(printer_id):
         others = [pid for pid in rules["printers"] if pid != printer_id and fits(pid)]
         others.sort(key=lambda pid: pid in busy)  # a free one first
         if others:
-            why = unable(rules, printer_id, job) or (
+            why = unable(rules, printer_id, job) or empty or (
                 f"{rules['printers'].get(printer_id, {}).get('label', printer_id)} isn't installed on this PC")
             return others[0], f"{reason}; {why}"
+        if empty:
+            return printer_id, f"{reason}; {empty}"
     return printer_id, reason
+
+
+def move_target(rules, printer_id, job, no_toner):
+    """Where a job this printer can't print for lack of toner goes instead (the Data screen's line), or None."""
+    def fits(pid):
+        return not unable(rules, pid, job) and not toner_why(rules, pid, job, no_toner)
+    return next((pid for pid in rules["printers"] if pid != printer_id and fits(pid)), None)
 
 
 def _choose(rules, job, busy=(), missing=()):

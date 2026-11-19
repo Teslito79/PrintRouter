@@ -104,6 +104,8 @@ class SettingsScreen(Screen):
         self.fallback = rules.get("fallback_printer")
         self.receipt = rules.get("receipt_printer") or None
         self.prices_on = tk.BooleanVar(value=rules.get("walkin_paper_prices") is True)
+        self.avoid_toner = tk.BooleanVar(value=rules.get("avoid_empty_toner", True) is not False)  # 2026-11-19_07
+        self.avoid_toner.trace_add("write", lambda *_: self.changed())
         self.rotate = copy.deepcopy(rules.get("rotate_sort") or {})  # 2026-11-19_05
         self.a3 = tk.StringVar(value=str(rules.get("copy_counter_a3_counts_as", 2)))
         self.poll = tk.StringVar(value=str(rules.get("copy_counter_poll_seconds", 5)))
@@ -330,6 +332,8 @@ class SettingsScreen(Screen):
             ttk.Label(box, text="Custom routing from rules.json", style="Head.TLabel").grid(row=0, column=0, sticky="w")
             ttk.Label(box, text="These rules can't be shown as the three rows below, so they are left as they are.",
                       style="Hint.TLabel").grid(row=1, column=0, sticky="w")
+            ttk.Checkbutton(box, text="Send jobs away from a copier that's out of toner (the Data screen's readings)",
+                            variable=self.avoid_toner).grid(row=2, column=0, sticky="w", pady=(8, 0))
             return
         one = len(self.printers) == 1
         names = self.choices()
@@ -357,6 +361,8 @@ class SettingsScreen(Screen):
                             "and white printer goes to the next printer that can take it. A printer that isn't "
                             "installed here is skipped like a busy one.", style="Hint.TLabel", wraplength=1000,
                   justify="left").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Checkbutton(box, text="Send jobs away from a copier that's out of toner (the Data screen's readings)",
+                        variable=self.avoid_toner).grid(row=3, column=0, sticky="w", pady=(8, 0))
         problems = self.routing_problems()
         if problems:
             ttk.Label(box, text="\n".join(problems), style="Warn.TLabel", justify="left").grid(
@@ -510,6 +516,7 @@ class SettingsScreen(Screen):
             rules["rules"] = copy.deepcopy(self.custom_rules)
             rules["fallback_printer"] = self.fallback if self.fallback in self.printers else next(iter(self.printers))
         rules["receipt_printer"] = self.receipt
+        rules["avoid_empty_toner"] = bool(self.avoid_toner.get())
         rotate = dict(self.rotate)
         if rotate.get("printer") not in self.printers:
             rotate["printer"] = None  # Off

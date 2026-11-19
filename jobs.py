@@ -104,6 +104,9 @@ class Jobs:
         # window's batch being sent); a colour job then goes to the rule's if_busy copier.
         self.busy_sources = []
         self._missing = (0.0, set())
+        # Copiers out of toner (2026-11-19_07): a function giving {printer: set of empty toners}, set by the main
+        # menu from the Data screen's readings; jobs go around them (rules.json / Settings avoid_empty_toner).
+        self.toner_source = None
 
     def missing(self):
         """Printers whose Windows printer isn't on this PC (Settings: "Not found"); routing skips them like busy
@@ -120,6 +123,15 @@ class Jobs:
         self._missing = (0.0, set())
         driverprint.use_maps(self.printers)
         self.printer_options = self._read_printer_options()
+
+    def no_toner(self):
+        """{printer: set of empty toners}, or {} (off in Settings, no readings, or none empty)."""
+        if self.toner_source is None or self.rules.get("avoid_empty_toner", True) is False:
+            return {}
+        try:
+            return self.toner_source() or {}
+        except Exception:
+            return {}
 
     def busy(self):
         found = set()
@@ -226,13 +238,17 @@ class Jobs:
             # Color with many pictures goes elsewhere than color documents (see rules.json).
             job["content"] = (routing.resolve_content(self.rules, "auto", coverage)
                               if job["color"] else "document")
-            printer_id, reason = routing.choose_printer(self.rules, job,
-                                                        self.busy() if busy is None else busy, self.missing())
+            no_toner = self.no_toner()
+            printer_id, reason = routing.choose_printer(self.rules, job, self.busy() if busy is None else busy,
+                                                        self.missing(), no_toner)
             if job["rotate"] and self.rules["rotate_sort"].get("printer") in self.printers:
                 printer_id, reason = self.rules["rotate_sort"]["printer"], "Rotate sort"
+            job["toner"] = routing.toner_why(self.rules, printer_id, job, no_toner) or (
+                reason.split("; ", 1)[1] if "out of" in reason and "; " in reason else "")
         else:
             job["content"] = ""
             printer_id, reason = s["printer"], "Picked"
+            job["toner"] = routing.toner_why(self.rules, printer_id, job, self.no_toner()) or ""
         print_copies, sheets = layout.plan(job["pages"], copies, job["duplex"], job["paper"],
                                            self.rules["a5_layout"], job["per_side"])
         job.update(printer=printer_id, reason=reason, print_copies=print_copies, sheets=sheets)
@@ -312,6 +328,10 @@ class Jobs:
         note = self.default_note(job)
         if note:
             parts.append(note)
+        if job and job.get("toner"):  # 2026-11-19_07: why it went elsewhere, or that its copier is out of toner
+            moved = job.get("printer") in self.printers and routing.toner_why(
+                self.rules, job["printer"], job, self.no_toner()) is None
+            parts.append(job["toner"] + (f": sent to {self.printers[job['printer']]['label']}" if moved else ""))
         return " · ".join(parts)
 
     def default_note(self, job):
