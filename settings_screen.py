@@ -226,8 +226,8 @@ class SettingsScreen(Screen):
         p = self.printers[pid]
         p.update(queue=values["queue"], label=values["label"], color=values["color"], max_paper=values["max_paper"],
                  copy_counter=values["copy_counter"])
-        for key in ("max_gsm", "address"):
-            if values[key]:
+        for key in ("max_gsm", "address", "paper_map", "tray_map"):
+            if values.get(key):
                 p[key] = values[key]
             else:
                 p.pop(key, None)
@@ -537,8 +537,10 @@ class PrinterDialog:
             widget.grid(row=r, column=1, sticky="w", pady=4)
             r += 1
 
-        row("Windows printer:", ttk.Combobox(f, textvariable=self.vars["queue"], values=installed, state="readonly",
-                                             width=36, font=FONT))
+        queue_box = ttk.Combobox(f, textvariable=self.vars["queue"], values=installed, state="readonly", width=36,
+                                 font=FONT)
+        row("Windows printer:", queue_box)
+        queue_box.bind("<<ComboboxSelected>>", lambda _: self.fill_maps(suggest=True))
         row("Name in ORCA:", ttk.Entry(f, textvariable=self.vars["label"], width=24, font=FONT))
         c = ttk.Frame(f)
         for value in COLOURS.values():
@@ -562,6 +564,13 @@ class PrinterDialog:
         if not pid:  # on by default for a printer with a network address
             self.vars["address"].trace_add("write", lambda *_: self.vars["copy_counter"].set(
                 bool(self.vars["address"].get().strip())))
+        # Paper and trays (2026-11-18_03): ORCA's names translated to this driver's, for printers of other brands.
+        self.maps_box = ttk.LabelFrame(f, text="Paper and trays", padding=8, style="Section.TLabelframe")
+        self.maps_box.grid(row=r, column=0, columnspan=2, sticky="we", pady=(10, 0))
+        r += 1
+        self.map_vars = None  # {"paper": {ORCA name: StringVar}, "tray": {...}} while a translation is shown
+        self.saved_maps = {"paper": p.get("paper_map"), "tray": p.get("tray_map")} if p.get("paper_map") else None
+        self.saved_queue = p.get("queue")
         self.error = ttk.Label(f, text="", style="Bad.TLabel", wraplength=480, justify="left")
         self.error.grid(row=r, column=0, columnspan=2, sticky="w")
         r += 1
@@ -569,8 +578,80 @@ class PrinterDialog:
         b.grid(row=r, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(b, text="OK", style="Print.TButton", command=self.done).pack(side="left")
         ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
+        self.fill_maps(suggest=not self.saved_maps)
         theme.dark_title_bar(dlg)
         dlg.grab_set()
+
+    # -------------------------------------------------------------- paper and trays
+    def orca_names(self):
+        rules = self.screen.ctx.rules
+        return list(rules.get("paper_types", [])), list(rules.get("trays", []))
+
+    def used_trays(self):
+        """The trays ORCA sends by itself: the default one and the bypass (special paper)."""
+        import routing
+        return [self.screen.ctx.rules.get("defaults", {}).get("tray", "Auto Tray Select"), routing.BYPASS]
+
+    def fill_maps(self, suggest=False):
+        """Read the driver's paper types and trays (read only) and show the translation, suggested or as saved."""
+        import driverprint
+        box = self.maps_box
+        for w in box.winfo_children():
+            w.destroy()
+        self.map_vars, self.map_good = None, {}
+        queue = self.vars["queue"].get()
+        papers, trays = self.orca_names()
+        if not queue:
+            ttk.Label(box, text="Pick the Windows printer first.", style="Hint.TLabel").grid(row=0, column=0, sticky="w")
+            return
+        try:
+            features = driverprint.capabilities(queue)["features"]
+        except Exception:
+            ttk.Label(box, text="Couldn't read this printer's paper types and trays: ORCA's names are sent as they are.",
+                      style="Warn.TLabel", wraplength=460, justify="left").grid(row=0, column=0, sticky="w")
+            return
+        if driverprint.uses_orca_names(queue, papers, self.used_trays()):
+            ttk.Label(box, text="This printer uses ORCA's paper names: nothing to set", style="Good.TLabel").grid(
+                row=0, column=0, sticky="w")
+            return
+        offered = {"paper": list(features.get("PageMediaType", {})), "tray": list(features.get("JobInputBin", {}))}
+        saved = self.saved_maps if (self.saved_maps and queue == self.saved_queue and not suggest) else None
+        ttk.Label(box, text="ORCA's names on the left; pick this printer's own. Yellow: no good match found, pick by "
+                            "hand.", style="Hint.TLabel", wraplength=460, justify="left").grid(row=0, column=0,
+                                                                                               columnspan=2, sticky="w")
+        ttk.Button(box, text="Suggest again", command=lambda: self.fill_maps(suggest=True)).grid(
+            row=0, column=2, sticky="e")
+        scroll = costs.ScrollFrame(box)
+        scroll.grid(row=1, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
+        scroll.canvas.configure(height=240, width=480)
+        self.map_vars = {"paper": {}, "tray": {}}
+        r = 0
+        for kind, names, title in (("paper", papers, "Paper types"), ("tray", trays, "Trays")):
+            ttk.Label(scroll.inner, text=title, style="Head.TLabel").grid(row=r, column=0, sticky="w", pady=(4, 2))
+            r += 1
+            suggestions = driverprint.suggest(names, offered[kind], kind)
+            for name in names:
+                choice, good = suggestions[name]
+                if saved and name in (saved.get(kind) or {}):
+                    choice, good = saved[kind][name], True
+                var = tk.StringVar(value=choice)
+                label = ttk.Label(scroll.inner, text=name, style="TLabel" if good else "Warn.TLabel")
+                label.grid(row=r, column=0, sticky="w", padx=(0, 10))
+                cb = ttk.Combobox(scroll.inner, textvariable=var, values=offered[kind] + [driverprint.DEFAULT],
+                                  state="readonly", width=28, font=FONT)
+                cb.grid(row=r, column=1, sticky="w", pady=1)
+                cb.bind("<<ComboboxSelected>>", lambda _e, l=label: l.config(style="TLabel"))
+                self.map_vars[kind][name] = var
+                self.map_good[(kind, name)] = good
+                r += 1
+        theme.on_surface(box)
+
+    def maps(self):
+        """{"paper_map", "tray_map"} as shown, or {} (nothing to set: ORCA's names are sent as they are)."""
+        if not self.map_vars:
+            return {}
+        return {"paper_map": {n: v.get() for n, v in self.map_vars["paper"].items()},
+                "tray_map": {n: v.get() for n, v in self.map_vars["tray"].items()}}
 
     def values(self):
         """The typed values, or raises ValueError naming what's wrong."""
@@ -586,9 +667,9 @@ class PrinterDialog:
         gsm = v["max_gsm"].strip()
         if gsm and (not gsm.isdigit() or int(gsm) < 1):
             raise ValueError("Heaviest paper: a whole number of gsm, or empty for no limit.")
-        return {"queue": v["queue"], "label": label, "color": "bw" if v["color"] == COLOURS["bw"] else "color",
-                "max_paper": v["max_paper"], "max_gsm": int(gsm) if gsm else None,
-                "address": v["address"].strip(), "copy_counter": bool(v["copy_counter"])}
+        return dict({"queue": v["queue"], "label": label, "color": "bw" if v["color"] == COLOURS["bw"] else "color",
+                     "max_paper": v["max_paper"], "max_gsm": int(gsm) if gsm else None,
+                     "address": v["address"].strip(), "copy_counter": bool(v["copy_counter"])}, **self.maps())
 
     def done(self):
         try:

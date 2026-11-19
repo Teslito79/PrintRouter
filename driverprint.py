@@ -201,6 +201,114 @@ def option_names(printer, feature):
     return list(capabilities(printer)["features"].get(feature, {}))
 
 
+# --------------------------------------------------------------- other brands (2026-11-18_03)
+# ORCA speaks Ricoh: its paper types ("Thick 3(221 to 256 g/m2)") and trays ("Bypass Tray") are the Ricoh driver's
+# names, used everywhere in the logic. A printer of another brand gets a translation in Settings (settings.json,
+# printers -> paper_map / tray_map: ORCA's name -> this driver's option, or "Printer's default"), applied only here,
+# where a name meets the driver. A printer with no map (all of Tesla's Ricohs) is sent ORCA's names as before.
+DEFAULT = "Printer's default"
+_maps = {}  # Windows printer -> {"paper": {...}, "tray": {...}}
+
+
+def use_maps(printers):
+    """The translations of the printers in force (rules printers: paper_map / tray_map), by Windows printer."""
+    global _maps
+    _maps = {p.get("queue"): {"paper": dict(p.get("paper_map") or {}), "tray": dict(p.get("tray_map") or {})}
+             for p in printers.values() if p.get("paper_map") or p.get("tray_map")}
+
+
+def translate(printer, kind, name):
+    """The driver's option for ORCA's name (kind "paper" / "tray"): the same name without a map; None for the
+    printer's default (the feature is left out of the ticket)."""
+    if not name:
+        return name
+    value = (_maps.get(printer) or {}).get(kind, {}).get(name, name)
+    return None if value == DEFAULT else value
+
+
+GSM_RANGE = re.compile(r"(\d{2,3})\s*(?:-|–|to)\s*(\d{2,3})\s*(?:g|gsm|g/m)", re.IGNORECASE)
+GSM_ONE = re.compile(r"(\d{2,3})\s*(?:g\b|gsm|g/m)", re.IGNORECASE)
+KEYWORDS = (("plain", ("plain", "normal", "standard")), ("recycled", ("recycled",)), ("thin", ("thin", "light")),
+            ("label", ("label",)), ("envelope", ("envelope",)), ("matte", ("matte", "matt")),
+            ("glossy", ("gloss", "coated")), ("heavy", ("heavy", "thick", "card", "cover")), ("bond", ("bond",)),
+            ("letterhead", ("letterhead",)), ("preprinted", ("preprinted", "pre-printed")),
+            ("colour", ("colour", "color")))
+BYPASS_WORDS = ("manual", "bypass", "multi", "mp tray", "mpt", "mp")
+
+
+def gsm_range(name):
+    m = GSM_RANGE.search(name or "")
+    if m:
+        lo, hi = sorted((int(m.group(1)), int(m.group(2))))
+        return lo, hi
+    m = GSM_ONE.search(name or "")
+    return (int(m.group(1)), int(m.group(1))) if m else None
+
+
+def _has(text, word):
+    """The word at the start of a word in text ("card" in "Cardstock"); short ones ("mp") whole only."""
+    end = r"(?![a-z])" if len(word) <= 3 else ""
+    return re.search(rf"(?<![a-z]){re.escape(word)}{end}", text) is not None
+
+
+def suggest_one(name, options, kind):
+    """(this driver's option, True when it is a good match) for one of ORCA's names; (DEFAULT, False) when nothing
+    matches: the same name; else by weight (the gsm range that covers ORCA's best); else by keyword (paper), or the
+    bypass / tray number / auto / large capacity (trays)."""
+    if name in options:
+        return name, True
+    low = name.lower()
+    if kind == "tray":
+        if "bypass" in low:
+            words = BYPASS_WORDS
+        elif re.match(r"tray (\d)", low):
+            n = re.match(r"tray (\d)", low).group(1)
+            words = (f"tray {n}", f"cassette {n}", f"drawer {n}")
+        elif "auto" in low:
+            words = ("auto",)
+        elif "large capacity" in low:
+            words = ("large capacity", "high capacity", "lct", "hcf")
+        else:
+            words = ()
+        for word in words:
+            for option in options:
+                if _has(option.lower(), word):
+                    return option, True
+        return DEFAULT, False
+    mine = gsm_range(name)
+    if mine:
+        best, overlap = None, -1
+        for option in options:
+            theirs = gsm_range(option)
+            if theirs:
+                o = min(mine[1], theirs[1]) - max(mine[0], theirs[0])
+                if o >= 0 and o > overlap:
+                    best, overlap = option, o
+        if best:
+            return best, True
+    for _, words in KEYWORDS:
+        found = [w for w in words if _has(low, w)]
+        if found:  # the same keyword first ("card": Cardstock), then any word of its group ("heavy", "thick")
+            for group in (found, words):
+                for option in options:
+                    if any(_has(option.lower(), w) for w in group):
+                        return option, True
+            break
+    return DEFAULT, False
+
+
+def suggest(names, options, kind):
+    """{ORCA's name: (option or DEFAULT, good)} for every name."""
+    return {name: suggest_one(name, list(options), kind) for name in names}
+
+
+def uses_orca_names(printer, paper_types, trays):
+    """True when the driver offers ORCA's own names (Tesla's Ricohs): nothing to set."""
+    features = capabilities(printer)["features"]
+    return (set(paper_types) <= set(features.get("PageMediaType", {}))
+            and set(trays) <= set(features.get("JobInputBin", {})))
+
+
 # --------------------------------------------------------------- DEVMODE
 
 def _ticket(caps, choices):
@@ -238,19 +346,26 @@ def _merge(printer, buf):
         winspool.ClosePrinter(hp)
 
 
+def ticket_for(printer, media_type=None, tray=None):
+    """The print ticket for ORCA's paper type and tray on this printer: translated by its map (2026-11-18_03); a
+    feature at the printer's default is left out instead of failing."""
+    caps = capabilities(printer)
+    choices = {}
+    media_type, tray = translate(printer, "paper", media_type), translate(printer, "tray", tray)
+    if media_type:
+        choices["PageMediaType"] = media_type
+    if tray:
+        choices["JobInputBin"] = tray
+    return _ticket(caps, choices)
+
+
 def build_devmode(printer, paper, color, duplex, copies, media_type=None, tray=None, short_edge=False):
     """Driver settings for one job. media_type / tray are option display names, e.g. 'Thick 4(257 to 300 g/m2)'.
 
     Double-sided flips on the long edge of the (portrait) paper, or on the short edge.
     """
-    caps = capabilities(printer)
-    choices = {}
-    if media_type:
-        choices["PageMediaType"] = media_type
-    if tray:
-        choices["JobInputBin"] = tray
     with _Provider(printer) as h:
-        ticket = _Stream(_ticket(caps, choices).encode("utf-8"))
+        ticket = _Stream(ticket_for(printer, media_type, tray).encode("utf-8"))
         size, dm, err = wintypes.ULONG(), ctypes.c_void_p(), ctypes.c_void_p()
         try:
             _check(prntvpt.PTConvertPrintTicketToDevMode(h, ticket.ptr, K_USER_DEFAULT_DEVMODE, K_PT_JOB_SCOPE,
@@ -294,15 +409,26 @@ def describe_devmode(printer, buf):
     return result
 
 
-@functools.lru_cache(maxsize=512)
 def refused_settings(printer, paper, color, duplex, media_type, tray):
     """Settings the driver would quietly change for this combination, e.g. ['double-sided'].
 
     Drivers drop settings that can't go together (a printer may not print
     double-sided on its thickest paper) without saying so; this finds out first.
+    Compared with the translated names (2026-11-18_03); a feature left at the printer's default is never refused.
     """
+    return _refused(printer, paper, color, duplex, translate(printer, "paper", media_type),
+                    translate(printer, "tray", tray), media_type, tray)
+
+
+@functools.lru_cache(maxsize=512)
+def _refused(printer, paper, color, duplex, media_type, tray, orca_media=None, orca_tray=None):
     caps = capabilities(printer)["features"]
-    dm = build_devmode(printer, paper, color, duplex, 1, media_type, tray)
+    saved = _maps.pop(printer, None)  # the names are translated already
+    try:
+        dm = build_devmode(printer, paper, color, duplex, 1, media_type, tray)
+    finally:
+        if saved is not None:
+            _maps[printer] = saved
     got = describe_devmode(printer, dm)
 
     def short(name):
@@ -314,9 +440,9 @@ def refused_settings(printer, paper, color, duplex, media_type, tray):
     if (got.get("PageOutputColor") == "Monochrome") == color:
         refused.append("color" if color else "black & white")
     if media_type and got.get("PageMediaType") != short(caps["PageMediaType"].get(media_type)):
-        refused.append(media_type.split("(")[0].strip())
+        refused.append((orca_media or media_type).split("(")[0].strip())
     if tray and got.get("JobInputBin") != short(caps["JobInputBin"].get(tray)):
-        refused.append(tray)
+        refused.append(orca_tray or tray)
     if got.get("PageMediaSize") != f"ISO{paper}":
         refused.append(paper)
     return refused

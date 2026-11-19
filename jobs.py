@@ -98,6 +98,7 @@ class Jobs:
         self.rules = rules
         self.prices = prices
         self.printers = rules["printers"]
+        driverprint.use_maps(self.printers)  # other brands: ORCA's names translated at the driver (2026-11-18_03)
         self.printer_options = self._read_printer_options()
         # Functions giving the copiers ORCA is using right now (the PrintHub view, the main
         # window's batch being sent); a colour job then goes to the rule's if_busy copier.
@@ -117,6 +118,7 @@ class Jobs:
     def settings_changed(self):
         """Settings were saved (2026-11-18_02): read the drivers' options and the installed printers again."""
         self._missing = (0.0, set())
+        driverprint.use_maps(self.printers)
         self.printer_options = self._read_printer_options()
 
     def busy(self):
@@ -160,9 +162,12 @@ class Jobs:
         if not offered:
             return None
         missing = []
-        if job["paper_type"] not in offered["PageMediaType"]:
+        queue = self.printers[printer_id]["queue"]
+        media = driverprint.translate(queue, "paper", job["paper_type"])  # None: the printer's default, fine
+        tray = driverprint.translate(queue, "tray", job["tray"])
+        if media and media not in offered["PageMediaType"]:
             missing.append(receipt.short_paper_type(job["paper_type"]))
-        if job["tray"] not in offered["JobInputBin"]:
+        if tray and tray not in offered["JobInputBin"]:
             missing.append(job["tray"])
         return f"No {', '.join(missing)} on this printer" if missing else None
 
@@ -304,7 +309,21 @@ class Jobs:
         parts.append(f"× {s['copies']}")
         if s["rotate"] == "1":
             parts.append("Rotate sort")
+        note = self.default_note(job)
+        if note:
+            parts.append(note)
         return " · ".join(parts)
+
+    def default_note(self, job):
+        """Said once on the job line when this printer's map leaves the paper type or tray at its default
+        (2026-11-18_03), so staff check the paper."""
+        if not job or job.get("printer") not in self.printers:
+            return ""
+        queue = self.printers[job["printer"]]["queue"]
+        what = [word for word, kind, name in (("paper type", "paper", job.get("paper_type")),
+                                              ("tray", "tray", job.get("tray")))
+                if name and driverprint.translate(queue, kind, name) is None]
+        return f"printed with the printer's default {' and '.join(what)}" if what else ""
 
     # ------------------------------------------------------------- printing
 
