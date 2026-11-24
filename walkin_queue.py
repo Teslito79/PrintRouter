@@ -131,6 +131,8 @@ class Run:
         for i, item in enumerate(order["items"]):
             if fixed and fixed.get(i) is None:
                 continue
+            if wo.round_of(item) != wo.current_round(order):
+                continue  # printed in an earlier round, or added for a later one (2026-11-24_02)
             prepared = self.preparer.get(order, item)
             if prepared is None:
                 raise ValueError(f"item {i + 1} is still being checked")
@@ -467,7 +469,11 @@ class Run:
                 pass
             part["state"] = "collected"
             if all(part["state"] == "collected" for part in o["parts"].values()):
-                wo.set_status(o, "printed")
+                if wo.next_round(o):  # items added meanwhile print next (2026-11-24_02)
+                    wo.save_order(o)
+                    wo.refresh(o)
+                else:
+                    wo.set_status(o, "printed")
             else:
                 wo.save_order(o)
         self.copiers[pid] = {"state": "idle"}

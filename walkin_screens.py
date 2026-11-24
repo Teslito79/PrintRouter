@@ -1982,6 +1982,14 @@ class QuoteScreen(Screen):
         if self.mode == "email" and not (name or wo.norm_phone(phone) or wo.norm_email(email)):
             messagebox.showwarning(parent=self.win, title="ORCA", message="Give a name, a phone or an email.")
             return
+        candidates = wo.open_orders_for(phone, email)  # an open order of this customer (2026-11-24_02)
+        if candidates:
+            choice = ask_add(self.win, candidates, self.items, self.rounding, name)
+            if choice is None:
+                return  # Cancel: nothing is placed, the screen stays
+            if choice != "new":
+                self.add_to(choice)
+                return
         customers = wo.Customers()
         keep = True
         if not customers.known(phone, email):  # a first-time customer: keep their details? (2026-11-17_07)
@@ -2008,11 +2016,29 @@ class QuoteScreen(Screen):
             messagebox.showwarning(parent=self.win, title="ORCA", message=f"Could not make the order folder.\n\n{e}")
             return
         # No Explorer window (Tesla, 2026-11-24_01): only the number window; Open folder opens it when wanted.
+        self.after_place(order, list(range(len(order["items"]))))
+
+    def add_to(self, order):
+        """Add this quote's items to the customer's open order (2026-11-24_02): priced again as one, the number
+        window says "Added to #123"."""
+        try:
+            order = wo.add_items(order, self.items, self.rounding)
+        except ValueError as e:
+            messagebox.showwarning(parent=self.win, title="ORCA", message=str(e))
+            return
+        except OSError as e:
+            messagebox.showwarning(parent=self.win, title="ORCA", message=f"Could not add to the order.\n\n{e}")
+            return
+        first = len(order["items"]) - len(self.items)
+        self.after_place(order, list(range(first, len(order["items"]))), added=True)
+
+    def after_place(self, order, indexes, added=False):
+        """The number window, the dropped files copied in, and the form emptied."""
         self.placed_number = order["number"]
-        dialog = NumberDialog(self.win, order)
+        dialog = NumberDialog(self.win, order, indexes if added else None)
         # Files dropped on the quote's items: copied into the item folders now (the originals stay where they are).
         tasks, problems = [], []
-        for item, files in zip(order["items"], self.drops):
+        for item, files in zip([order["items"][k] for k in indexes], self.drops):
             for path in files:
                 why = wo.drop_problem(path, item["kind"])
                 if why:
@@ -2034,25 +2060,126 @@ class QuoteScreen(Screen):
         self.reprice()
 
 
+def order_total_text(order):
+    return euro(wo.price_due(order))
+
+
+class AddQuestion:
+    """At Place order, when the customer has an open order (2026-11-24_02): add these items to it, or a new order.
+    One open order: the question with its new total; several: a list (number, status, date, total) to pick from.
+    An order whose new pricing can't be done names why and can't be picked. result: the order, "new" or None."""
+
+    def __init__(self, parent, candidates, items, rounding, name=""):
+        self.result = None
+        self.options = []
+        for order in candidates:
+            priced = wo.price_with(order, items, rounding)
+            self.options.append((order, priced))
+        self.dlg = dlg = tk.Toplevel(parent)
+        dlg.title("ORCA - add to an open order?")
+        dlg.transient(parent)
+        f = ttk.Frame(dlg, padding=24)
+        f.grid()
+        n = len(items)
+        what = f"{'these ' + str(n) + ' items' if n > 1 else 'this item'}"
+        who = (candidates[0]["customer"].get("name") or name or "This customer")
+        buttons = ttk.Frame(f)
+        if len(candidates) == 1:
+            order, priced = self.options[0]
+            k = len(order["items"])
+            ttk.Label(f, text=f"{who} already has order #{order['number']} ({status_of(order)}, "
+                              f"{k} item{'s' if k != 1 else ''}, {order_total_text(order)}).",
+                      wraplength=560, justify="left").grid(row=0, column=0, sticky="w")
+            if priced["problems"]:
+                ttk.Label(f, text="It can't be added to: " + "; ".join(priced["problems"]), style="Bad.TLabel",
+                          wraplength=560, justify="left").grid(row=1, column=0, sticky="w", pady=(10, 0))
+            else:
+                ttk.Label(f, text=f"Add {what} to #{order['number']}? New total: {euro(priced['due'])}.",
+                          style="Head.TLabel", wraplength=560, justify="left").grid(row=1, column=0, sticky="w",
+                                                                                     pady=(10, 0))
+                ttk.Button(buttons, text=f"Add to #{order['number']}", style="Print.TButton",
+                           command=lambda: self.choose(order)).pack(side="left", padx=(0, 8))
+        else:
+            ttk.Label(f, text=f"{who} already has {len(candidates)} open orders. Add {what} to one of them, or "
+                              f"place a new order.", wraplength=620, justify="left").grid(row=0, column=0, sticky="w")
+            self.tree = ttk.Treeview(f, columns=("number", "status", "date", "total", "new"), show="headings",
+                                     height=min(6, len(candidates)), selectmode="browse")
+            for col, text, width in (("number", "Order", 70), ("status", "Status", 260), ("date", "Placed", 110),
+                                     ("total", "Total", 100), ("new", "New total", 220)):
+                self.tree.heading(col, text=text)
+                self.tree.column(col, width=width, anchor="w")
+            for i, (order, priced) in enumerate(self.options):
+                new = "can't add: " + priced["problems"][0] if priced["problems"] else euro(priced["due"])
+                self.tree.insert("", "end", iid=str(i), values=(f"#{order['number']}", status_of(order),
+                                                                when(order["times"].get("placed") or order["created"]),
+                                                                order_total_text(order), new))
+            self.tree.grid(row=1, column=0, sticky="we", pady=(10, 0))
+            self.add_button = ttk.Button(buttons, text="Add to the selected order", style="Print.TButton",
+                                         command=self.choose_selected)
+            self.add_button.pack(side="left", padx=(0, 8))
+            self.add_button.state(["disabled"])
+            self.tree.bind("<<TreeviewSelect>>", lambda _e: self.selected())
+        buttons.grid(row=3, column=0, sticky="w", pady=(16, 0))
+        ttk.Button(buttons, text="New order", command=lambda: self.choose("new")).pack(side="left", padx=(0, 8))
+        ttk.Button(buttons, text="Cancel", command=lambda: self.choose(None)).pack(side="left")
+        dlg.protocol("WM_DELETE_WINDOW", lambda: self.choose(None))
+        theme.dark_title_bar(dlg)
+
+    def selected(self):
+        sel = self.tree.selection()
+        ok = bool(sel) and not self.options[int(sel[0])][1]["problems"]
+        self.add_button.state(["!disabled"] if ok else ["disabled"])
+
+    def choose_selected(self):
+        sel = self.tree.selection()
+        if sel and not self.options[int(sel[0])][1]["problems"]:
+            self.choose(self.options[int(sel[0])][0])
+
+    def choose(self, result):
+        self.result = result
+        try:
+            self.dlg.destroy()
+        except tk.TclError:
+            pass
+
+    def wait(self):
+        self.dlg.grab_set()
+        self.dlg.wait_window()
+        return self.result
+
+
+def ask_add(parent, candidates, items, rounding, name=""):
+    """The order to add to, "new" for a new order, or None (Cancel: nothing is placed)."""
+    return AddQuestion(parent, candidates, items, rounding, name).wait()
+
+
 class NumberDialog:
     """The new order's number, large, and its items, each with a drop area for its file."""
 
-    def __init__(self, parent, order):
+    def __init__(self, parent, order, added=None):
+        """added: the indexes of items just added to an open order (2026-11-24_02): "Added to #123", the new total
+        and only those items."""
         self.order = order
+        self.indexes = list(added) if added is not None else list(range(len(order["items"])))
         self.dlg = dlg = tk.Toplevel(parent)
-        dlg.title("ORCA - order placed")
+        dlg.title("ORCA - added to order" if added is not None else "ORCA - order placed")
         dlg.transient(parent)
         f = ttk.Frame(dlg, padding=30)
         f.grid()
-        ttk.Label(f, text="Order placed").grid(row=0, column=0)
+        ttk.Label(f, text="Added to" if added is not None else "Order placed").grid(row=0, column=0)
         ttk.Label(f, text=f"#{order['number']}", style="Huge.TLabel").grid(row=1, column=0, pady=10)
-        ttk.Label(f, text=f"{customer_text(order['customer'])}\n{euro(wo.price_due(order))}\n"
+        total = euro(wo.price_due(order))
+        if added is not None:
+            before = (order.get("added") or [{}])[-1].get("total_before")
+            total = f"New total: {total}" + (f" (was {euro(before)})" if before is not None else "")
+        ttk.Label(f, text=f"{customer_text(order['customer'])}\n{total}\n"
                           f"Drop each item's file onto it below, or put it into its folder (Open folder in Orders).",
                   justify="center").grid(row=2, column=0)
         items = ttk.Frame(f)
         items.grid(row=3, column=0, sticky="we", pady=(12, 0))
         self.areas = []
-        for i, item in enumerate(order["items"]):
+        for i in self.indexes:
+            item = order["items"][i]
             ttk.Label(items, text=f"{i + 1}. {item['description']}", wraplength=560, justify="left").grid(
                 row=2 * i, column=0, sticky="w", pady=(6, 0))
             area = drop_area(items, item["kind"], lambda paths, x, y, k=i: self.drop(k, paths))
@@ -2077,7 +2204,7 @@ class NumberDialog:
 
     def refresh(self):
         """Each item's drop area names the files in its folder (ORCA's own .cdr and Options.txt left out)."""
-        for item, area in zip(self.order["items"], self.areas):
+        for item, area in zip([self.order["items"][i] for i in self.indexes], self.areas):
             if item["kind"] == "document":
                 f = wo.item_file(self.order, item)
                 names = [f.name] if f else []
@@ -2148,9 +2275,15 @@ class OrderList(Screen):
         ttk.Label(box, text=f"Placed {when(times['placed'])}   ·   printed {when(times['printed'])}   ·   "
                             f"ready {when(times['ready'])}", style="Small.TLabel").grid(row=0, column=0, sticky="w")
         r = 1
-        droppable = self.can_drop(order)
+        for text in wo.added_lines(order):  # "Items 4-5 added 24 Nov 10:12" (2026-11-24_02)
+            ttk.Label(box, text=text, style="Small.TLabel").grid(row=r, column=0, sticky="w")
+            r += 1
+        droppable_order = self.can_drop(order)
         box.item_rows = []
         for i, item in enumerate(order["items"]):
+            # items printed in an earlier round take no more files; items added for a later round always do
+            droppable = (wo.round_of(item) > wo.current_round(order)
+                         or (droppable_order and wo.round_of(item) == wo.current_round(order)))
             state = self.item_state(order, item)
             working = "   ·   ".join(item.get("working", [])[1:-1])  # how the price was worked out (2026-11-17_08)
             line = ttk.Label(box, text=f"{i + 1}. {item['description']}   {euro(item['price'])}"
@@ -2166,7 +2299,7 @@ class OrderList(Screen):
                 filedrop.target(note, on_drop)
                 drop_area(box, item["kind"], on_drop).grid(row=r, column=0, sticky="w", padx=(22, 0), pady=(2, 4))
                 r += 1
-        if droppable:
+        if droppable_order:
             filedrop.target(box, lambda paths, x, y: self.drop_on_order(order, paths))
         row = ttk.Frame(box)
         row.grid(row=r, column=0, sticky="w", pady=(6, 0))
@@ -2612,6 +2745,8 @@ class PrintJobsScreen(OrderList):
         box = super().card(parent, order, buttons)
         if order["status"] == "ready_to_print" and not order.get("parts"):  # once sent, where items go is fixed
             for i, r in enumerate(box.item_rows):
+                if wo.round_of(order["items"][i]) != wo.current_round(order):
+                    continue  # printed earlier, or waiting for a later round (2026-11-24_02)
                 ttk.Button(box, text="Settings…", command=lambda o=order, k=i: SettingsDialog(self, o, k)).grid(
                     row=r, column=1, rowspan=2, sticky="e")
         return box
@@ -2689,6 +2824,13 @@ STATUS_TEXT = {"waiting": "Waiting for PDF", "ready_to_print": "Ready to print",
                "ready_for_pickup": "Ready for pickup", "collected": "Collected", "cancelled": "Cancelled"}
 
 
+def status_of(order):
+    """"Ready to print (items 4-5 added; 1-3 printed)" for an order items were added to (2026-11-24_02)."""
+    text = STATUS_TEXT.get(order["status"], order["status"])
+    note = wo.added_note(order) if order["status"] not in ("collected", "cancelled") else ""
+    return f"{text} ({note})" if note else text
+
+
 class OrdersScreen(OrderList):
     """Waiting for PDF, Ready to print (with printed ones), Ready for pickup; grouped by customer; search.
     2026-11-19_04 (Tesla: "just the order number and the customers details"): one line per order, the number, the
@@ -2755,7 +2897,7 @@ class OrdersScreen(OrderList):
         number.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 18))
         who = ttk.Label(box, text=customer_text(order["customer"]), style="Head.TLabel")
         who.grid(row=0, column=1, columnspan=2, sticky="w")
-        status = state or STATUS_TEXT.get(order["status"], order["status"])
+        status = state or status_of(order)
         info = ttk.Label(box, text=f"{status}   ·   placed {when(order['times'].get('placed') or order['created'])}",
                          style="Good.TLabel" if order["status"] in ("printed", "ready_for_pickup") else "Small.TLabel")
         info.grid(row=1, column=1, columnspan=2, sticky="w")
@@ -2844,7 +2986,7 @@ class OrderDetailsScreen(OrderList):
             ttk.Label(self.scroll.inner, text=f"#{self.number} is no longer open (collected or cancelled).",
                       style="Warn.TLabel").grid(row=0, column=0, sticky="w")
             return
-        status = STATUS_TEXT.get(order["status"], order["status"])
+        status = status_of(order)
         self.status.config(text=f"{customer_text(order['customer'])}   ·   {status}")
         box = self.card(self.scroll.inner, order, self.buttons(order))
         box.grid(row=0, column=0, sticky="we")

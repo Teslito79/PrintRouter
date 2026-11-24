@@ -387,6 +387,165 @@ def price_due(order):
     return order["changed_total"] if order.get("changed_total") is not None else order["total"]
 
 
+# ------------------------------------------------------------------ adding to an open order (2026-11-24_02)
+# Tesla: a customer's order is printed and waiting for pickup, then they email something else: "We need those orders
+# to merge and use the same order number and add the new order and make a new total". ORCA asks at Place order; the
+# whole order is priced again as one; only the new items print, with their own cover sheet ("#123 (added)").
+#
+# Print rounds: every item has "round" (0 for the items placed first). order["round"] is the round whose items print
+# now; "parts" are that round's parts (walkin_queue). Items added after the order was sent get the next round; once
+# every part of the round is collected, its parts move to "earlier_parts" and the next round starts (Waiting for PDF
+# or Ready to print). Items added before anything was sent simply join the round that hasn't printed yet.
+# order["added"]: [{"time", "items": [4, 5] (numbers as staff see them), "round", "total_before", "total_after"}].
+
+
+def round_of(item):
+    return item.get("round", 0)
+
+
+def current_round(order):
+    return order.get("round", 0)
+
+
+def round_items(order, rnd=None):
+    """[(index from 0, item)] of a round (the round printing now by default)."""
+    rnd = current_round(order) if rnd is None else rnd
+    return [(i, item) for i, item in enumerate(order["items"]) if round_of(item) == rnd]
+
+
+def pending_items(order):
+    """Items added while the round before was still on the copiers: they print in a later round."""
+    return [(i, item) for i, item in enumerate(order["items"]) if round_of(item) > current_round(order)]
+
+
+def _ranges(numbers):
+    """[1, 2, 3] -> "1-3", [4] -> "4", [1, 3] -> "1, 3"."""
+    numbers = sorted(numbers)
+    if not numbers:
+        return ""
+    if numbers == list(range(numbers[0], numbers[-1] + 1)) and len(numbers) > 1:
+        return f"{numbers[0]}-{numbers[-1]}"
+    return ", ".join(str(n) for n in numbers)
+
+
+def added_note(order):
+    """For the status: "items 4-5 added; 1-3 printed", "items 4-5 added; they print after 1-3", or ""."""
+    if not order.get("added"):
+        return ""
+    last = order["added"][-1]
+    new = _ranges(last["items"])
+    rnd = current_round(order)
+    if pending_items(order):
+        waiting = _ranges([i + 1 for i, item in enumerate(order["items"]) if round_of(item) <= rnd
+                           and (i + 1) not in last["items"]])
+        return f"item{'s' if len(last['items']) > 1 else ''} {new} added; they print after {waiting}"
+    printed = _ranges([i + 1 for i, item in enumerate(order["items"]) if round_of(item) < rnd])
+    word = f"item{'s' if len(last['items']) > 1 else ''} {new} added"
+    return f"{word}; {printed} printed" if printed else word
+
+
+def added_lines(order):
+    """Details…: "Items 4-5 added 24 Nov 10:12" for each time items were added."""
+    out = []
+    for a in order.get("added", []):
+        t = datetime.datetime.fromisoformat(a["time"])
+        n = len(a["items"])
+        out.append(f"Item{'s' if n > 1 else ''} {_ranges(a['items'])} added {t.day} {t:%b %H:%M}")
+    return out
+
+
+def open_orders_for(phone="", email="", customers=None):
+    """The open orders (not collected or cancelled: every order in Walk-in\\Open) of the customer a phone or email
+    belongs to, by phone or email only, never by name: the customer record's phones and emails, and the phone and
+    email typed on each order (Don't keep orders have no record). Oldest first."""
+    phone, email = norm_phone(phone), norm_email(email)
+    if not phone and not email:
+        return []
+    customers = customers or Customers()
+    ids = {c["id"] for c in (customers.by_phone(phone), customers.by_email(email)) if c}
+    out = []
+    for order in list_open():
+        c = order.get("customer") or {}
+        typed_phone, typed_email = norm_phone(c.get("phone", "")), norm_email(c.get("email", ""))
+        if c.get("id") in ids or (phone and typed_phone == phone) or (email and typed_email == email):
+            out.append(order)
+    return sorted(out, key=lambda o: o["created"])
+
+
+def price_with(order, new_items, rounding=None, pl=None, rules=None):
+    """The whole order priced again as one with the new items (the current price list, the order's own loyalty,
+    the screen's rounding): walkin_pricing.price_order's result; "problems" names any empty price cell."""
+    import walkin_prices
+    import walkin_pricing
+    pl = pl or walkin_prices.current()
+    level = (order.get("loyalty") or {}).get("level") or 0
+    return walkin_pricing.price_order(pl, list(order["items"]) + list(new_items), loyalty=level, rounding=rounding,
+                                      rules=rules)
+
+
+def add_items(order, new_items, rounding=None, pl=None, rules=None):
+    """Append new items to an open order (written safely, like place): their folders, CorelDRAW files and
+    Options.txt; the whole order priced again (rounding reset, then the screen's applied); an "added" record. Returns
+    the order. Raises ValueError with the message for staff."""
+    import walkin_pricing
+    with LOCK:
+        folder = order["_folder"]
+        try:
+            order = load_order(folder)  # the newest state (the sending thread may have written to it)
+        except (OSError, ValueError):
+            raise ValueError(f"#{order['number']} is no longer open.") from None
+        if order["status"] in ("collected", "cancelled"):
+            raise ValueError(f"#{order['number']} is no longer open.")
+        priced = price_with(order, new_items, rounding, pl, rules)
+        if priced["problems"]:
+            raise ValueError("\n".join(priced["problems"]))
+        before = price_due(order)
+        parts = order.get("parts") or {}
+        sent = bool(parts)
+        all_collected = sent and all(p["state"] == "collected" for p in parts.values())
+        rnd = current_round(order)
+        if sent:  # the items already sent print no more: the new ones get a round of their own
+            rnd = max([round_of(item) for item in order["items"]] + [rnd]) + 1
+        first = len(order["items"]) + 1
+        for i, item in enumerate(new_items, start=first):
+            sub = walkin_pricing.folder_name(i, item)
+            (folder / sub).mkdir(exist_ok=True)
+            order["items"].append(dict(item, description=walkin_pricing.describe(item), folder=sub, price=0.0,
+                                       note="", working=[], file=None, sheets=None, round=rnd))
+        for item, line in zip(order["items"], priced["lines"]):  # every item's price and working, as placed now
+            item.update(price=line["price"], note=line["note"], working=line.get("working", []))
+        loyalty = priced.get("loyalty") or {}
+        order["loyalty"] = {"level": loyalty.get("level", (order.get("loyalty") or {}).get("level", 0)),
+                            "pct": loyalty.get("pct"), "amount": loyalty.get("amount", 0.0)}
+        order["volume"], order["total"] = priced["volume"], priced["total"]
+        order["changed_total"] = priced["due"] if priced.get("rounding") else None
+        order["rounding"] = priced.get("rounding")
+        order.setdefault("added", []).append({"time": now(), "items": list(range(first, len(order["items"]) + 1)),
+                                              "round": rnd, "total_before": before, "total_after": price_due(order)})
+        if all_collected:  # printed (or ready for pickup): the new round starts now
+            next_round(order)
+        elif not sent and order["status"] not in ("waiting", "ready_to_print"):
+            order["status"] = "waiting"
+        save_order(order)
+        clear_cache()
+        prepare_products(order, rules)
+        return refresh(order, rules)
+
+
+def next_round(order):
+    """Every part of the round is collected and items wait in a later round: that round prints next (its parts made
+    when first sent). Returns True when a round started (the caller saves); False: the order is simply Printed."""
+    later = [round_of(item) for _, item in pending_items(order)]
+    if not later:
+        return False
+    if order.get("parts"):
+        order.setdefault("earlier_parts", []).append({"round": current_round(order), "parts": order["parts"]})
+    order["parts"] = None
+    order["round"] = min(later)
+    order["status"] = "waiting"  # refresh() makes it Ready to print when the new items have their files
+    return True
+
+
 def stem(order, index):
     """'W100-2': the CorelDRAW file and the print sheet of order #100, item 2 (no #: CorelDRAW and some Windows
     tools handle it badly)."""
@@ -450,9 +609,12 @@ def laid_out(order, item):
 
 
 def missing(order):
-    """What an order still needs before it can print (empty: ready)."""
+    """What an order still needs before it can print (empty: ready): the items of the round printing now (items
+    printed in an earlier round, or added for a later one, don't hold it up)."""
     out = []
     for i, item in enumerate(order["items"], start=1):
+        if round_of(item) != current_round(order):
+            continue
         if item["kind"] == "document":
             if item_file(order, item) is None:
                 out.append(f"item {i}: no file in “{item['folder']}”")

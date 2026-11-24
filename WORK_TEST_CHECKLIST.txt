@@ -99,3 +99,8 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    on the IM C4510. Make 1 A4 copy on one side, 1 A3 copy, and 1 A4 copy on both sides of one sheet.
    The panel should say "A4 B&W 3, A3 B&W 1 prints, on 2 A4 + 1 A3 sheets", with no A4 / A3 or sides
    buttons. Press Finish: Paper used shows "A4: 2 sheets" and "A3: 1 sheet". Then press Cancel.
+22. Adding to an open order: place a test order (Get Quote, your own phone), print it, press Pages
+   collected and Ready for pickup. Then Add Email with the same phone and one more PDF, and press Place
+   order: ORCA asks "… already has order #… Add this item to #…? New total: …". Press Add to #…: the
+   window says "Added to #…". Drop the PDF on the item, print it: only the new item prints, after a
+   cover sheet "#… (added)" counting only it. Check the new total in Orders, then Cancel order.

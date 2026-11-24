@@ -337,6 +337,8 @@ def take_for_part(order, pid, part, pl=None, rules=None):
     import walkin_prices
     import walkin_pricing
     key = f"paper:{pid}:{part.get('collected_times', 1)}"  # each time this part was printed and collected
+    if order.get("round"):  # a later round's parts (items added, 2026-11-24_02): their own key
+        key = f"paper:r{order['round']}:{pid}:{part.get('collected_times', 1)}"
     if key in _taken(order):
         return []
     pl = pl or walkin_prices.current()

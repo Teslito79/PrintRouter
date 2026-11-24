@@ -219,7 +219,10 @@ def counter_lines(order, pl=None, rules=None):
     import walkin_prices
     pl = pl or walkin_prices.current()
     copies, papers, uses, extras, unknown = {}, {}, {}, {}, []
+    rnd = order.get("round", 0)  # only the items printing now (items added later: 2026-11-24_02)
     for i, item in enumerate(order["items"], start=1):
+        if item.get("round", 0) != rnd:
+            continue
         try:
             need = walkin_pricing.needs(pl, item, rules)
         except Exception:  # an item ORCA can't read (a very old order)
@@ -274,6 +277,8 @@ def cover_pdf(order, path, when=None, rules=None):
     w = counter_pdf.Writer()
     c = order["customer"]
     lines = [(f"#{order['number']}", 72, True, 22)]  # (text, size, bold, space after)
+    if order.get("round"):  # the new items of an order added to (2026-11-24_02)
+        lines = [(f"#{order['number']} (added)", 60, True, 22)]
     lines += [(text, 18, True, 8) for text in (c.get("name"), c.get("phone"), c.get("email")) if text]
     if len(lines) > 1:
         lines[-1] = lines[-1][:3] + (lines[-1][3] + 10,)  # the gap after the customer block
