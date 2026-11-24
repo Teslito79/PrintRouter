@@ -2007,10 +2007,7 @@ class QuoteScreen(Screen):
         except OSError as e:
             messagebox.showwarning(parent=self.win, title="ORCA", message=f"Could not make the order folder.\n\n{e}")
             return
-        try:
-            os.startfile(order["_folder"])
-        except OSError:
-            pass
+        # No Explorer window (Tesla, 2026-11-24_01): only the number window; Open folder opens it when wanted.
         self.placed_number = order["number"]
         dialog = NumberDialog(self.win, order)
         # Files dropped on the quote's items: copied into the item folders now (the originals stay where they are).
@@ -2050,7 +2047,7 @@ class NumberDialog:
         ttk.Label(f, text="Order placed").grid(row=0, column=0)
         ttk.Label(f, text=f"#{order['number']}", style="Huge.TLabel").grid(row=1, column=0, pady=10)
         ttk.Label(f, text=f"{customer_text(order['customer'])}\n{euro(wo.price_due(order))}\n"
-                          f"Drop each item's file onto it below, or put it into its folder (open in Explorer).",
+                          f"Drop each item's file onto it below, or put it into its folder (Open folder in Orders).",
                   justify="center").grid(row=2, column=0)
         items = ttk.Frame(f)
         items.grid(row=3, column=0, sticky="we", pady=(12, 0))
