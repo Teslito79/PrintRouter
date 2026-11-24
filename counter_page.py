@@ -9,7 +9,10 @@ Two layouts are known (Tesla's check, 2026-11-18):
 - MP C3004: a top line "Total : n"; Copier and Printer with the four rows as totals only ("Black & White 318002");
   "Other Function(s)": A3/DLT, Duplex, Banner for the whole machine.
 
-parse() matches the labels, never positions, and allows any spaces, line breaks and table cells between them.
+parse() matches the labels and allows any spaces, line breaks and table cells between them. The real IM C4510 page
+(saved at work, 2026-11-24) has "Simplex" and "Duplex" only once, as column headings; each row then gives A3/DLT /
+Others / Banner twice with no side word: the first group is simplex, the second duplex (a Simplex / Duplex word next
+to the numbers wins; a new row starts again).
 """
 import html as htmllib
 import re
@@ -112,6 +115,11 @@ def parse(page):
                     entry["total"] = value
                 elif side:
                     entry.setdefault(side, {})[key] = value
+                else:
+                    # the real IM C4510 page (2026-11-24_03): "Simplex Duplex" only as column headings, then each
+                    # row gives its A3/DLT / Others / Banner twice: the first group simplex, the second duplex
+                    first = entry.setdefault("simplex", {})
+                    (first if key not in first else entry.setdefault("duplex", {}))[key] = value
             elif key == "Total" and out["total"] is None and not out["sections"]:
                 out["total"] = value  # the MP C3004's top line
     return out

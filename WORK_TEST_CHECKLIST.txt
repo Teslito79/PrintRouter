@@ -95,3 +95,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    each; open Categories… and check the count line. Pick a category in the filter, press Minimum… and
    give it a number. Then press Low stock: it lists the items under that minimum (Order more) and any
    displayed item whose storage can't fill the display (Low).
+21. Copy counter on the IM C4510 (the real counter page): Walk-in > Copy counter, press Start counting
+   on the IM C4510. Make 1 A4 copy on one side, 1 A3 copy, and 1 A4 copy on both sides of one sheet.
+   The panel should say "A4 B&W 3, A3 B&W 1 prints, on 2 A4 + 1 A3 sheets", with no A4 / A3 or sides
+   buttons. Press Finish: Paper used shows "A4: 2 sheets" and "A3: 1 sheet". Then press Cancel.

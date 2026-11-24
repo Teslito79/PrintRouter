@@ -431,14 +431,15 @@ class Counter:
         return {size: [(paper, n) for paper, n in self.paper_rows(size) if n > 0] for size in self.sheet_totals()}
 
     def running_text(self):
-        """While counting: "A4 B&W 34, A4 colour 6, A3 colour 1 copies, on 28 A4 + 1 A3 sheets"."""
+        """While counting: "A4 B&W 34, A4 colour 6, A3 colour 1 prints, on 28 A4 + 1 A3 sheets" (a print is one printed
+        side: one side = 1, both sides = 2; Tesla, 2026-11-24)."""
         copies = {}
         for seg in self.segments_now():
             copies[seg["type"]] = copies.get(seg["type"], 0) + seg["copies"]
         if not copies:
-            return "No copies yet"
+            return "No prints yet"
         sheets = self.sheet_totals()
-        text = ", ".join(f"{kind} {copies[kind]}" for kind in TYPES if copies.get(kind)) + " copies"
+        text = ", ".join(f"{kind} {copies[kind]}" for kind in TYPES if copies.get(kind)) + " prints"
         if sheets:
             text += ", on " + " + ".join(f"{n} {size}" for size, n in sheets.items()) + " sheets"
         return text
@@ -459,7 +460,7 @@ class Counter:
 
     def lines(self):
         """The segment list for the panel. Copies the copier split by itself (sheets) are shown per segment and
-        type: "A4 B&W: 23 copies on 20 sheets (17 one side, 3 both sides), Smooth white 80 gsm"."""
+        type: "A4 B&W: 23 prints on 20 sheets (17 one side, 3 both sides), Smooth white 80 gsm"."""
         out, grouped = [], {}
         for seg in self.segments_now():
             if seg.get("sheets") is None:
@@ -493,7 +494,7 @@ class Counter:
 
 
 def auto_text(kind, paper, g):
-    copies = f"{g['copies']} cop{'y' if g['copies'] == 1 else 'ies'}"
+    copies = f"{g['copies']} print{'' if g['copies'] == 1 else 's'}"
     sheets = f"{g['sheets']} sheet{'' if g['sheets'] == 1 else 's'}"
     if g["single"] and g["double"]:
         sides = f"{g['single']} one side, {g['double']} both sides"
@@ -555,7 +556,7 @@ def price(pl, segments, extras, rounding=None, papers=None, paper_problems=()):
         if rate is None:
             problems.append(P.no_price(f"{size} {P.COLOUR_WORD[colour]} copies, Tier {tier}"))
         else:
-            lines.append((f"{kind}: {n}", P.r2(n * rate)))
+            lines.append((f"{kind}: {_plural(n, 'print')}", P.r2(n * rate)))
     for (paper, size), n in paper_sheets(segments, papers).items():
         price_ = pl.papers.get(pl.paper_row(paper), {}).get(size)
         text = f"{paper}: {_plural(n, size + ' sheet')}"
