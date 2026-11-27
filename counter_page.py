@@ -162,14 +162,16 @@ def page_totals(parsed, sections=("Copier",)):
 
 
 def toner_counts(parsed):
-    """(black, colour) pages for the Data screen, or None: the Total section's sheets, duplex x 2 (IM C4510 and
-    IM C3000); else Copier + Printer totals (MP C3004)."""
-    split = sheet_split(parsed, "Total")
-    if split:
-        return tuple(s["s_a3"] + s["s_other"] + 2 * (s["d_a3"] + s["d_other"]) for s in (split["bw"], split["color"]))
+    """(black, colour) pages for the Data screen, or None: the Copier + Printer rows' "Total : n" per colour (pages,
+    A3 counted as 2, as the copier's own Total Counter and the SNMP total count; 2026-11-27_01, so copies per toner
+    stay continuous with what was recorded before 24_03); a page without row totals: the Total section's sheets,
+    duplex x 2. The copy counter is not affected (it uses the Copier section's sheets)."""
     totals = page_totals(parsed, ("Copier", "Printer"))
     if totals:
         return totals["bw"], totals["color"]
+    split = sheet_split(parsed, "Total")
+    if split:
+        return tuple(s["s_a3"] + s["s_other"] + 2 * (s["d_a3"] + s["d_other"]) for s in (split["bw"], split["color"]))
     return None
 
 

@@ -104,3 +104,7 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    order: ORCA asks "… already has order #… Add this item to #…? New total: …". Press Add to #…: the
    window says "Added to #…". Drop the PDF on the item, print it: only the new item prints, after a
    cover sheet "#… (added)" counting only it. Check the new total in Orders, then Cancel order.
+23. Spare toners shared by copiers: Data > Spare toners…. For each black (or colour) toner the shop
+   uses on two copiers, press Edit… on one of them, tick the other copier for the same colour and
+   Save: ORCA asks to join them, press Yes. Check both copiers' lines on the Data screen show the same
+   "Spare: n (shared with …)", and that every count in Spare toners… matches what is on the shelf.

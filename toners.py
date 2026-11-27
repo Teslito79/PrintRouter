@@ -37,9 +37,9 @@ SETTINGS_FILE = "toner_settings.json"
 CHECK_FILE = "copier_check.txt"
 LOG_COLUMNS = ["id", "time", "copier", "colour", "total", "black count", "colour count", "level before",
                "level after", "how"]
-STOCK_FILE = "toner_stock.json"  # spare toners on the shelf, per copier and colour (2026-11-16)
+STOCK_FILE = "toner_stock.json"  # spare toners on the shelf, each fitting one or more copiers (2026-11-27_01)
 STOCK_LOG = "toner_stock_log.csv"
-STOCK_COLUMNS = ["time", "copier", "colour", "change", "new count", "reason"]
+STOCK_COLUMNS = ["time", "copier", "colour", "change", "new count", "reason", "toner"]  # toner: 2026-11-27_01
 STOCK_LOCK = threading.RLock()
 EVERY = 600  # seconds between readings
 JUMP = 30  # a level rising this much (points) is a new toner
@@ -544,23 +544,113 @@ def history(changes, printers):
     return out
 
 
-# ------------------------------------------------------------------ spare toner stock
+# ------------------------------------------------------------------ spare toners on the shelf
+# 2026-11-27_01 (Tesla: "some toners are compatible with two or even all three of the copiers"): toner_stock.json
+# holds a list of toners, each {"id", "name", "fits": [[copier, colour], ...], "count", "min"}, in the order staff
+# put them (the first that fits and has any left is used first). "taken": {change id: toner id}. The old file (one
+# count per copier and colour, 2026-11-16) is moved once: every copier and colour becomes one toner with the same
+# count and minimum, named "IM C4510 black"; a copy of the old file stays as toner_stock.before-shared.json.
+
+STOCK_BACKUP = "toner_stock.before-shared.json"
+
+
+def _whole(value, default):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else default
+
+
+def default_name(printers, fits):
+    """"IM C4510 black", "Black for IM C3000 / IM C4510"."""
+    pids = list(dict.fromkeys(pid for pid, _ in fits))
+    colours = list(dict.fromkeys(colour for _, colour in fits))
+    labels = [printers.get(pid, {}).get("label", pid) for pid in pids]
+    if len(fits) == 1:
+        return f"{labels[0]} {colours[0]}"
+    if len(colours) == 1:
+        return f"{COLOUR_NAMES.get(colours[0], colours[0])} for {' / '.join(labels)}"
+    return " / ".join(f"{printers.get(p, {}).get('label', p)} {c}" for p, c in fits)
+
+
+def _clean(data):
+    toners = []
+    for t in data.get("toners") or []:
+        fits = [[str(f[0]), f[1]] for f in t.get("fits") or [] if isinstance(f, (list, tuple)) and len(f) == 2
+                and f[1] in COLOURS]
+        toners.append({"id": str(t.get("id") or uuid.uuid4().hex[:8]), "name": str(t.get("name") or "Toner"),
+                       "fits": fits, "count": _whole(t.get("count"), 0), "min": _whole(t.get("min"), 1)})
+    taken = data.get("taken") if isinstance(data.get("taken"), dict) else {}
+    return {"format": 2, "saved": bool(data.get("saved")), "toners": toners,
+            "taken": {str(k): str(v) for k, v in taken.items()}}
+
+
+def _from_old(printers, old):
+    """The old per-copier file (or none): one toner per copier and colour, the same counts and minimums."""
+    copiers = old.get("copiers") or {}
+    toners = []
+    for pid in list(printers) + [p for p in copiers if p not in printers]:
+        for colour in COLOURS:
+            s = (copiers.get(pid) or {}).get(colour) or {}
+            toners.append({"id": f"{pid}-{colour}", "name": default_name(printers, [[pid, colour]]),
+                           "fits": [[pid, colour]], "count": _whole(s.get("count"), 0), "min": _whole(s.get("min"), 1)})
+    taken = {}
+    old_taken = {str(x) for x in old.get("taken") or []}
+    if old_taken:
+        for c in read_changes():
+            if c["id"] in old_taken:
+                taken[c["id"]] = f"{c['copier']}-{c['colour']}"
+    return {"format": 2, "saved": bool(old.get("saved")), "toners": toners, "taken": taken}
+
 
 def load_stock(printers):
-    """{"saved": bool, "copiers": {pid: {colour: {"count", "min"}}}, "taken": [change ids]}.
-    A missing file: every count 0, minimum 1, not saved yet."""
-    data = _load_json(STOCK_FILE, {})
-    out = {"saved": bool(data.get("saved")), "copiers": {}, "taken": [str(x) for x in data.get("taken") or []]}
-    for pid in printers:
-        saved = (data.get("copiers") or {}).get(pid) or {}
-        out["copiers"][pid] = {}
-        for colour in COLOURS:
-            s = saved.get(colour) or {}
-            count, minimum = s.get("count"), s.get("min")
-            out["copiers"][pid][colour] = {
-                "count": count if isinstance(count, int) and count >= 0 else 0,
-                "min": minimum if isinstance(minimum, int) and minimum >= 0 else 1}
-    return out
+    """{"format": 2, "saved": bool, "toners": [...], "taken": {change id: toner id}}. An old file is moved to this
+    format once (a copy of it kept); a missing file gives one toner per copier and colour (count 0, minimum 1), not
+    saved yet."""
+    with STOCK_LOCK:
+        data = _load_json(STOCK_FILE, None)
+        if isinstance(data, dict) and isinstance(data.get("toners"), list):
+            return _clean(data)
+        stock = _from_old(printers, data if isinstance(data, dict) else {})
+        if isinstance(data, dict):  # an old file: keep a copy, then write the new one (temp file, then rename)
+            backup = _path(STOCK_BACKUP)
+            if not backup.exists():
+                tmp = backup.with_name(f".{backup.name}.tmp")
+                tmp.write_bytes(_path(STOCK_FILE).read_bytes())
+                os.replace(tmp, backup)
+            _save_json(STOCK_FILE, stock)
+        return stock
+
+
+def save_stock(stock):
+    with STOCK_LOCK:
+        _save_json(STOCK_FILE, stock)
+
+
+def toner_by_id(stock, tid):
+    return next((t for t in stock["toners"] if t["id"] == tid), None)
+
+
+def fitting(stock, pid, colour):
+    """The toners that fit this copier and colour, in their order."""
+    return [t for t in stock["toners"] if [pid, colour] in t["fits"]]
+
+
+def spare_text(printers, stock, pid, colour):
+    """("Spare: 3 (shared with IM C4510)", warning "" / "Order more" / "None left" / "No spare toner set")."""
+    fit = fitting(stock, pid, colour)
+    if not fit:
+        return "Spare: 0", "No spare toner set"
+    count = sum(t["count"] for t in fit)
+    others = list(dict.fromkeys(p for t in fit for p, _ in t["fits"] if p != pid))
+    shared = (" (shared with " + ", ".join(printers.get(p, {}).get("label", p) for p in others) + ")") if others else ""
+    warn = "None left" if count == 0 else "Order more" if any(t["count"] <= t["min"] for t in fit) else ""
+    return f"Spare: {count}{shared}", warn
+
+
+def toner_status(t):
+    return "None left" if t["count"] == 0 else "Order more" if t["count"] <= t["min"] else ""
+
+
+def fits_text(printers, fits):
+    return ", ".join(f"{printers.get(p, {}).get('label', p)} {c}" for p, c in fits) or "nothing ticked"
 
 
 def _log_stock(lines):
@@ -582,66 +672,177 @@ def _log_stock(lines):
 
 
 def read_stock_log():
+    """The log's lines; old lines (before 2026-11-27_01) read with the toner empty."""
     try:
         with open(_path(STOCK_LOG), newline="", encoding="utf-8-sig") as f:
-            return list(csv.DictReader(f))
+            return [{k: (row.get(k) or "") for k in STOCK_COLUMNS} for row in csv.DictReader(f)]
     except OSError:
         return []
 
 
-def _stock_line(when, pid, colour, change, count, reason):
-    return [when.strftime("%Y-%m-%d %H:%M:%S"), pid, colour, f"{change:+d}", count, reason]  # +3 / -1: Excel reads them as numbers
+def _now():
+    return datetime.datetime.now().replace(microsecond=0)
 
 
-def save_stock_counts(printers, pid, new, reasons, when=None):
-    """Stock… Save: new = {colour: (count, min)}, reasons = {colour: 'added' / 'counted'}."""
-    when = when or datetime.datetime.now().replace(microsecond=0)
+def _stock_line(when, pid, colour, change, count, reason, toner=""):
+    return [when.strftime("%Y-%m-%d %H:%M:%S"), pid, colour, f"{change:+d}", count, reason,
+            toner]  # +3 / -1: Excel reads them as numbers
+
+
+def _toner_line(when, t, change, reason):
+    """A line for a whole toner: its copiers and colours joined ("C3000/C4510", "black")."""
+    pids = "/".join(dict.fromkeys(p for p, _ in t["fits"]))
+    colours = "/".join(dict.fromkeys(c for _, c in t["fits"]))
+    return _stock_line(when, pids, colours, change, t["count"], reason, t["name"])
+
+
+def set_count(printers, tid, count, reason, when=None):
+    """The window's − / + / typed count: logged "added" or "counted"."""
     with STOCK_LOCK:
         stock = load_stock(printers)
+        t = toner_by_id(stock, tid)
+        if t is None:
+            return
+        count = max(0, int(count))
+        change = count - t["count"]
+        t["count"] = count
+        stock["saved"] = True
+        if change:
+            _log_stock([_toner_line(when or _now(), t, change, reason)])
+        save_stock(stock)
+
+
+def set_minimum(printers, tid, minimum):
+    with STOCK_LOCK:
+        stock = load_stock(printers)
+        t = toner_by_id(stock, tid)
+        if t is not None:
+            t["min"] = max(0, int(minimum))
+            stock["saved"] = True
+            save_stock(stock)
+
+
+def add_toner(printers, name, fits, join=(), when=None):
+    """A new toner (count 0); join: ids of toners to join into it (their counts added, their fits kept)."""
+    with STOCK_LOCK:
+        stock = load_stock(printers)
+        t = {"id": uuid.uuid4().hex[:8], "name": name, "fits": [list(f) for f in fits], "count": 0, "min": 1}
+        stock["toners"].append(t)
+        save_stock(stock)
+    if join:
+        edit_toner(printers, t["id"], name, fits, join, when)
+    return t["id"]
+
+
+def edit_toner(printers, tid, name, fits, join=(), when=None):
+    """Change a toner's name and what it fits. join: ids of other toners joined into it: the counts are added, the
+    fits kept together, the others removed; logged "joined"."""
+    when = when or _now()
+    with STOCK_LOCK:
+        stock = load_stock(printers)
+        t = toner_by_id(stock, tid)
+        if t is None:
+            return
+        t["name"] = name
+        t["fits"] = [list(f) for f in fits]
         lines = []
-        for colour, (count, minimum) in new.items():
-            cell = stock["copiers"][pid][colour]
-            if count != cell["count"]:
-                lines.append(_stock_line(when, pid, colour, count - cell["count"], count, reasons.get(colour, "counted")))
-            cell["count"], cell["min"] = count, minimum
+        for oid in join:
+            other = toner_by_id(stock, oid)
+            if other is None or other is t:
+                continue
+            n = other["count"]
+            t["count"] += n
+            for f in other["fits"]:
+                if f not in t["fits"]:
+                    t["fits"].append(f)
+            t["min"] = max(t["min"], other["min"])
+            other["count"] = 0
+            lines.append(_toner_line(when, other, -n, f"joined into {t['name']}"))
+            lines.append(_toner_line(when, t, +n, f"joined {other['name']}"))
+            stock["toners"].remove(other)
+            for cid, was in list(stock["taken"].items()):  # a change taken from it gives back to the joined one
+                if was == oid:
+                    stock["taken"][cid] = t["id"]
         stock["saved"] = True
         if lines:
             _log_stock(lines)
-        _save_json(STOCK_FILE, stock)
+        save_stock(stock)
+
+
+def remove_toner(printers, tid, when=None):
+    """Remove a toner from the list (the log stays)."""
+    with STOCK_LOCK:
+        stock = load_stock(printers)
+        t = toner_by_id(stock, tid)
+        if t is None:
+            return
+        stock["toners"].remove(t)
+        stock["saved"] = True
+        _log_stock([_toner_line(when or _now(), t, -t["count"], "removed")])
+        save_stock(stock)
+
+
+def move_toner(printers, tid, step):
+    """Move up (-1) / down (+1): the first toner that fits and has any left is used first."""
+    with STOCK_LOCK:
+        stock = load_stock(printers)
+        t = toner_by_id(stock, tid)
+        if t is None:
+            return
+        i = stock["toners"].index(t)
+        j = max(0, min(len(stock["toners"]) - 1, i + step))
+        stock["toners"].insert(j, stock["toners"].pop(i))
+        save_stock(stock)
+
+
+def join_candidates(stock, tid, fits):
+    """Other toners that fit a copier and colour newly ticked on this toner (tid None: a new toner)."""
+    t = toner_by_id(stock, tid) if tid else None
+    before = t["fits"] if t else []
+    new = [list(f) for f in fits if list(f) not in before]
+    out = []
+    for other in stock["toners"]:
+        if other["id"] != tid and any(f in other["fits"] for f in new) and other not in out:
+            out.append(other)
+    return out
 
 
 def take_spare(printers, change, when=None):
-    """A toner change used a spare: one off that copier's count (never below 0)."""
+    """A toner change used a spare: one off the first toner in the list that fits that copier and colour and has any
+    left (never below 0); the change remembers which. None left anywhere: recorded anyway, nothing taken."""
     with STOCK_LOCK:
         stock = load_stock(printers)
-        cell = stock["copiers"].get(change["copier"], {}).get(change["colour"])
-        if cell is None or cell["count"] <= 0:
-            return  # recorded anyway; nothing to take: the screen says "None left"
-        cell["count"] -= 1
-        stock["taken"].append(change["id"])
-        _log_stock([_stock_line(when or change["time"], change["copier"], change["colour"], -1, cell["count"],
-                                "toner changed")])
-        _save_json(STOCK_FILE, stock)
+        t = next((t for t in fitting(stock, change["copier"], change["colour"]) if t["count"] > 0), None)
+        if t is None:
+            return None
+        t["count"] -= 1
+        stock["taken"][change["id"]] = t["id"]
+        _log_stock([_stock_line(when or change["time"], change["copier"], change["colour"], -1, t["count"],
+                                "toner changed", t["name"])])
+        save_stock(stock)
+        return t["id"]
 
 
 def give_back_spare(printers, change, when=None):
-    """A recorded change was removed: its spare goes back on the shelf (only if one was taken)."""
+    """A recorded change was removed: its spare goes back to the toner it was taken from (if it is still listed)."""
     with STOCK_LOCK:
         stock = load_stock(printers)
-        if change["id"] not in stock["taken"]:
+        tid = stock["taken"].pop(change["id"], None)
+        if tid is None:
             return
-        stock["taken"].remove(change["id"])
-        cell = stock["copiers"][change["copier"]][change["colour"]]
-        cell["count"] += 1
-        _log_stock([_stock_line(when or datetime.datetime.now().replace(microsecond=0), change["copier"],
-                                change["colour"], +1, cell["count"], "change removed")])
-        _save_json(STOCK_FILE, stock)
+        t = toner_by_id(stock, tid)
+        if t is not None:
+            t["count"] += 1
+            _log_stock([_stock_line(when or _now(), change["copier"], change["colour"], +1, t["count"],
+                                    "change removed", t["name"])])
+        save_stock(stock)
 
 
 def stock_low(printers):
-    """True while any spare count is at or below its minimum (the red dot on the menu)."""
+    """True while any toner is at or below its minimum (the red dot on the menu): per toner, so a shared toner
+    warns once."""
     stock = load_stock(printers)
-    return any(c["count"] <= c["min"] for colours in stock["copiers"].values() for c in colours.values())
+    return any(t["count"] <= t["min"] for t in stock["toners"])
 
 
 # ------------------------------------------------------------------ the background reader
@@ -857,6 +1058,7 @@ class TonersScreen:
         ttk.Button(top, text="← Back", command=self.back).pack(side="left", padx=(0, 24))
         ttk.Label(top, text="Data", style="Summary.TLabel").pack(side="left")
         for text, command in (("Copier check", self.copier_check), ("Open in Excel", self.open_log),
+                              ("Spare toners…", lambda: SpareTonersWindow(self)),
                               ("Read now", self.read_now), ("Toner replaced…", self.replaced)):
             ttk.Button(top, text=text, command=command,
                        style="Print.TButton" if text.startswith("Toner") else "TButton").pack(side="right", padx=(8, 0))
@@ -880,7 +1082,7 @@ class TonersScreen:
     def fill(self):
         self.shown_version = self.watch.version
         self.stock = load_stock(self.printers)
-        self.status.config(text="" if self.stock["saved"] else "Count your spare toners and enter them with Stock…",
+        self.status.config(text="" if self.stock["saved"] else "Count your spare toners and enter them with Spare toners…",
                            foreground=theme.MUTED if self.stock["saved"] else theme.ERROR)
         top = self.scroll.canvas.yview()[0]
         inner = self.scroll.inner
@@ -953,7 +1155,7 @@ class TonersScreen:
         address = (r or {}).get("address")
         ttk.Label(line, text=f"Address: {address or 'not found'}", style="Small.TLabel").pack(side="left")
         ttk.Button(line, text="Address…", command=lambda: AddressDialog(self, pid)).pack(side="left", padx=(8, 0))
-        ttk.Button(line, text="Stock…", command=lambda: StockDialog(self, pid)).pack(side="left", padx=(6, 0))
+        ttk.Button(line, text="Stock…", command=lambda: SpareTonersWindow(self, pid)).pack(side="left", padx=(6, 0))
         counters = (r or {}).get("counters") if r and r["ok"] else None
         if counters is None and r is not None and not r["ok"]:
             counters = (_load_json(STATE_FILE, {}).get("copiers", {}).get(pid) or {}).get("counters")
@@ -975,13 +1177,17 @@ class TonersScreen:
             raw = ((r or {}).get("toner_raw") or {}).get(colour) if r and r["ok"] else None
             ttk.Label(line, text=level_text(level, raw), width=9,
                       foreground=theme.ERROR if level == 0 else theme.TEXT).pack(side="left")
-            spare = self.stock["copiers"][pid][colour]
-            warn = "None left" if spare["count"] == 0 else "Order more" if spare["count"] <= spare["min"] else ""
-            ttk.Label(line, text=f"Spare: {spare['count']}",
-                      foreground=theme.ERROR if warn else theme.TEXT).pack(side="left")
+            text, warn = spare_text(self.printers, self.stock, pid, colour)  # shared toners (2026-11-27_01)
+            ttk.Label(line, text=text, foreground=theme.ERROR if warn else theme.TEXT).pack(side="left")
             if warn:
                 ttk.Label(line, text=warn, foreground=theme.ERROR, font=("Segoe UI", 9, "bold")).pack(
                     side="left", padx=(5, 0))
+
+    def menu_dot(self):
+        """The menu's red dot follows a change made in Spare toners at once (when the menu offers it)."""
+        hook = getattr(self, "on_stock_change", None)
+        if hook:
+            hook()
 
     def out_text(self, pid):
         """"Out of yellow toner: colour jobs go to IM C4510" (2026-11-19_07), or ""."""
@@ -1113,70 +1319,237 @@ class AddressDialog:
         self.screen.read_now()
 
 
-class StockDialog:
-    """Spare toners of one copier: count (− / + / typed) and minimum per colour, Save or Cancel."""
+class SpareTonersWindow:
+    """Spare toners (2026-11-27_01): every toner on the shelf, what it fits, count (− / + / typed), minimum and
+    status; Edit… (name and fits, joining two toners), Move up / down (the first that fits is used first), Remove,
+    Add toner…. Opened from the Data screen, or from a copier's Stock… showing only what fits it (Show all)."""
 
-    def __init__(self, screen, pid):
+    def __init__(self, screen, pid=None):
         self.screen, self.pid = screen, pid
-        stock = load_stock(screen.printers)["copiers"][pid]
+        self.printers = screen.printers
         self.dlg = dlg = tk.Toplevel(screen.win)
-        dlg.title("Spare toners")
-        dlg.resizable(False, False)
+        dlg.title("ORCA - Spare toners")
         dlg.transient(screen.win)
+        dlg.geometry("1180x620")
+        f = ttk.Frame(dlg, padding=18)
+        f.grid(sticky="nsew")
+        dlg.columnconfigure(0, weight=1)
+        dlg.rowconfigure(0, weight=1)
+        f.columnconfigure(0, weight=1)
+        f.rowconfigure(2, weight=1)
+        top = ttk.Frame(f)
+        top.grid(row=0, column=0, sticky="we")
+        self.title = ttk.Label(top, text="", style="Head.TLabel")
+        self.title.pack(side="left")
+        self.all_button = ttk.Button(top, text="Show all", command=self.show_all)
+        ttk.Label(f, text="A toner can fit several copiers. When a toner is changed, ORCA takes one from the first "
+                          "toner in this list that fits and has any left. Order more shows at or below the minimum.",
+                  style="Hint.TLabel", wraplength=1100, justify="left").grid(row=1, column=0, sticky="w", pady=(4, 8))
+        self.scroll = screen.costs.ScrollFrame(f)
+        self.scroll.grid(row=2, column=0, sticky="nsew")
+        b = ttk.Frame(f)
+        b.grid(row=3, column=0, sticky="we", pady=(10, 0))
+        ttk.Button(b, text="Add toner…", style="Print.TButton", command=lambda: EditTonerDialog(self, None)).pack(
+            side="left")
+        ttk.Button(b, text="Close", command=self.close).pack(side="right")
+        self.error = ttk.Label(b, text="", foreground=theme.ERROR)
+        self.error.pack(side="left", padx=(12, 0))
+        dlg.protocol("WM_DELETE_WINDOW", self.close)
+        theme.dark_title_bar(dlg)
+        self.fill()
+
+    def show_all(self):
+        self.pid = None
+        self.fill()
+
+    def shown(self, stock):
+        if self.pid is None:
+            return stock["toners"]
+        return [t for t in stock["toners"] if any(p == self.pid for p, _ in t["fits"])]
+
+    def fill(self):
+        stock = load_stock(self.printers)
+        if self.pid is None:
+            self.title.config(text="Spare toners")
+            self.all_button.pack_forget()
+        else:
+            self.title.config(text=f"Spare toners that fit {self.printers[self.pid]['label']}")
+            self.all_button.pack(side="left", padx=(12, 0))
+        inner = self.scroll.inner
+        for w in inner.winfo_children():
+            w.destroy()
+        font = self.screen.costs.FONT
+        for c, text in enumerate(("Toner", "Fits", "", "On the shelf", "", "Minimum", "", "")):
+            ttk.Label(inner, text=text, style="Hint.TLabel").grid(row=0, column=c, sticky="w", padx=(0, 6))
+        self.entries = {}
+        toners = self.shown(stock)
+        if not toners:
+            ttk.Label(inner, text="No spare toner fits this copier yet: Add toner…, or Edit… one and tick it.",
+                      style="Hint.TLabel").grid(row=1, column=0, columnspan=8, sticky="w", pady=6)
+        for r, t in enumerate(toners, start=1):
+            ttk.Label(inner, text=t["name"], style="Head.TLabel", wraplength=260).grid(row=r, column=0, sticky="w",
+                                                                                     pady=4, padx=(0, 10))
+            ttk.Label(inner, text=fits_text(self.printers, t["fits"]), wraplength=330, justify="left").grid(
+                row=r, column=1, sticky="w", padx=(0, 10))
+            ttk.Button(inner, text="−", width=3, command=lambda i=t["id"]: self.step(i, -1)).grid(row=r, column=2)
+            count = tk.StringVar(value=str(t["count"]))
+            e = ttk.Entry(inner, textvariable=count, width=5, font=font, justify="center")
+            e.grid(row=r, column=3, padx=2)
+            e.bind("<Return>", lambda _e, i=t["id"]: self.typed(i))
+            e.bind("<FocusOut>", lambda _e, i=t["id"]: self.typed(i))
+            ttk.Button(inner, text="+", width=3, command=lambda i=t["id"]: self.step(i, +1)).grid(row=r, column=4)
+            minimum = tk.StringVar(value=str(t["min"]))
+            m = ttk.Entry(inner, textvariable=minimum, width=5, font=font, justify="center")
+            m.grid(row=r, column=5, padx=(10, 2))
+            m.bind("<Return>", lambda _e, i=t["id"]: self.typed_min(i))
+            m.bind("<FocusOut>", lambda _e, i=t["id"]: self.typed_min(i))
+            self.entries[t["id"]] = (count, minimum)
+            status = toner_status(t)
+            ttk.Label(inner, text=status, foreground=theme.ERROR, font=("Segoe UI", 9, "bold"), width=11).grid(
+                row=r, column=6, sticky="w", padx=(8, 8))
+            row = ttk.Frame(inner)
+            row.grid(row=r, column=7, sticky="w")
+            for text, command in (("Edit…", lambda i=t["id"]: EditTonerDialog(self, i)),
+                                  ("Move up", lambda i=t["id"]: self.move(i, -1)),
+                                  ("Move down", lambda i=t["id"]: self.move(i, +1)),
+                                  ("Remove", lambda i=t["id"]: self.remove(i))):
+                ttk.Button(row, text=text, command=command).pack(side="left", padx=(0, 4))
+        self.changed()
+
+    def changed(self):
+        try:
+            self.screen.fill()
+            self.screen.menu_dot()
+        except (tk.TclError, AttributeError):
+            pass
+
+    def step(self, tid, delta):
+        stock = load_stock(self.printers)
+        t = toner_by_id(stock, tid)
+        if t is None:
+            return
+        set_count(self.printers, tid, t["count"] + delta, "added" if delta > 0 else "counted")
+        self.fill()
+
+    def typed(self, tid):
+        count = self.entries.get(tid, (None,))[0]
+        if count is None:
+            return
+        text = count.get().strip()
+        if not text.isdigit():
+            self.error.config(text="On the shelf: a whole number, 0 or more.")
+            return
+        self.error.config(text="")
+        t = toner_by_id(load_stock(self.printers), tid)
+        if t is not None and int(text) != t["count"]:
+            set_count(self.printers, tid, int(text), "counted")
+            self.fill()
+
+    def typed_min(self, tid):
+        minimum = self.entries.get(tid, (None, None))[1]
+        if minimum is None:
+            return
+        text = minimum.get().strip()
+        if not text.isdigit():
+            self.error.config(text="Minimum: a whole number, 0 or more.")
+            return
+        self.error.config(text="")
+        t = toner_by_id(load_stock(self.printers), tid)
+        if t is not None and int(text) != t["min"]:
+            set_minimum(self.printers, tid, int(text))
+            self.fill()
+
+    def move(self, tid, step):
+        move_toner(self.printers, tid, step)
+        self.fill()
+
+    def remove(self, tid):
+        t = toner_by_id(load_stock(self.printers), tid)
+        if t is None or not messagebox.askyesno(parent=self.dlg, title="Spare toners",
+                                                message=f"Remove “{t['name']}” ({t['count']} on the shelf) from the "
+                                                        f"list? The log keeps its lines."):
+            return
+        remove_toner(self.printers, tid)
+        self.fill()
+
+    def close(self):
+        for tid in list(self.entries):  # a count typed and not confirmed with Enter still counts
+            try:
+                self.typed(tid)
+                self.typed_min(tid)
+            except tk.TclError:
+                pass
+        self.dlg.destroy()
+        self.changed()
+
+
+class EditTonerDialog:
+    """A toner's name and what it fits: a grid of ticks, the copiers across, Black / Cyan / Magenta / Yellow down.
+    Ticking a copier and colour that already has its own toner asks once to join them (the counts added)."""
+
+    def __init__(self, window, tid):
+        self.window, self.tid = window, tid
+        printers = window.printers
+        stock = load_stock(printers)
+        t = toner_by_id(stock, tid) if tid else None
+        self.dlg = dlg = tk.Toplevel(window.dlg)
+        dlg.title("ORCA - Spare toner" if t else "ORCA - Add toner")
+        dlg.transient(window.dlg)
         f = ttk.Frame(dlg, padding=20)
         f.grid()
-        font = screen.costs.FONT
-        ttk.Label(f, text=f"Spare toners for {screen.printers[pid]['label']}", style="Head.TLabel").grid(
-            row=0, column=0, columnspan=6, sticky="w", pady=(0, 8))
-        for c, text in ((2, "On the shelf"), (5, "Minimum")):
-            ttk.Label(f, text=text, style="Hint.TLabel").grid(row=1, column=c, sticky="w")
-        self.counts, self.mins, self.typed = {}, {}, {}
+        ttk.Label(f, text="Name:").grid(row=0, column=0, sticky="w")
+        self.name = tk.StringVar(value=t["name"] if t else "")
+        ttk.Entry(f, textvariable=self.name, width=40, font=window.screen.costs.FONT).grid(
+            row=0, column=1, columnspan=len(printers), sticky="w", pady=(0, 10))
+        ttk.Label(f, text="Fits:", style="Head.TLabel").grid(row=1, column=0, sticky="w")
+        for c, pid in enumerate(printers, start=1):
+            ttk.Label(f, text=printers[pid]["label"]).grid(row=1, column=c, padx=8)
+        self.ticks = {}
+        start = [] if t else ([[window.pid, "black"]] if window.pid else [])
         for r, colour in enumerate(COLOURS, start=2):
-            ttk.Label(f, text=COLOUR_NAMES[colour], width=9).grid(row=r, column=0, sticky="w", pady=3)
-            self.counts[colour] = tk.StringVar(value=str(stock[colour]["count"]))
-            self.mins[colour] = tk.StringVar(value=str(stock[colour]["min"]))
-            self.typed[colour] = False
-            ttk.Button(f, text="−", width=3, command=lambda c=colour: self.step(c, -1)).grid(row=r, column=1, padx=2)
-            e = ttk.Entry(f, textvariable=self.counts[colour], width=5, font=font, justify="center")
-            e.grid(row=r, column=2, padx=2)
-            e.bind("<Key>", lambda _, c=colour: self.typed.__setitem__(c, True))
-            ttk.Button(f, text="+", width=3, command=lambda c=colour: self.step(c, +1)).grid(row=r, column=3, padx=2)
-            ttk.Label(f, text="").grid(row=r, column=4, padx=10)
-            ttk.Entry(f, textvariable=self.mins[colour], width=5, font=font, justify="center").grid(row=r, column=5)
-        ttk.Label(f, text="Order more shows when the shelf is at or below the minimum.", style="Hint.TLabel").grid(
-            row=6, column=0, columnspan=6, sticky="w", pady=(8, 0))
+            ttk.Label(f, text=COLOUR_NAMES[colour]).grid(row=r, column=0, sticky="w", pady=2)
+            for c, pid in enumerate(printers, start=1):
+                v = tk.BooleanVar(value=[pid, colour] in (t["fits"] if t else start))
+                ttk.Checkbutton(f, variable=v).grid(row=r, column=c)
+                self.ticks[(pid, colour)] = v
         self.error = ttk.Label(f, text="", foreground=theme.ERROR)
-        self.error.grid(row=7, column=0, columnspan=6, sticky="w")
+        self.error.grid(row=7, column=0, columnspan=len(printers) + 1, sticky="w", pady=(6, 0))
         b = ttk.Frame(f)
-        b.grid(row=8, column=0, columnspan=6, sticky="e", pady=(10, 0))
-        ttk.Button(b, text="Save", style="Print.TButton", command=self.done).pack(side="left")
+        b.grid(row=8, column=0, columnspan=len(printers) + 1, sticky="e", pady=(10, 0))
+        ttk.Button(b, text="Save", style="Print.TButton", command=self.save).pack(side="left")
         ttk.Button(b, text="Cancel", command=dlg.destroy).pack(side="left", padx=(8, 0))
         theme.dark_title_bar(dlg)
-        dlg.grab_set()
 
-    def step(self, colour, delta):
-        text = self.counts[colour].get().strip()
-        value = int(text) if text.isdigit() else 0
-        if delta < 0:
-            self.typed[colour] = True  # taking one off by hand is a correction: "counted"
-        self.counts[colour].set(str(max(0, value + delta)))
+    def fits(self):
+        return [[pid, colour] for colour in COLOURS for pid in self.window.printers
+                if self.ticks[(pid, colour)].get()]
 
-    def done(self):
-        new, reasons = {}, {}
-        for colour in COLOURS:
-            count, minimum = self.counts[colour].get().strip(), self.mins[colour].get().strip()
-            if not count.isdigit() or not minimum.isdigit():
-                self.error.config(text=f"{COLOUR_NAMES[colour]}: whole numbers, 0 or more.")
-                return
-            new[colour] = (int(count), int(minimum))
-            reasons[colour] = "counted" if self.typed[colour] else "added"
-        try:
-            save_stock_counts(self.screen.printers, self.pid, new, reasons)
-        except OSError as e:
-            self.error.config(text=f"Could not save: {e}")
+    def save(self):
+        printers = self.window.printers
+        fits = self.fits()
+        if not fits:
+            self.error.config(text="Tick at least one copier and colour.")
             return
+        name = self.name.get().strip() or default_name(printers, fits)
+        stock = load_stock(printers)
+        mine = toner_by_id(stock, self.tid)["count"] if self.tid else 0
+        join = []
+        for other in join_candidates(stock, self.tid, fits):
+            pairs = [f for f in fits if f in other["fits"]]
+            where = " and ".join(f"{printers.get(p, {}).get('label', p)} {c}" for p, c in pairs)
+            what = other["name"] if other["name"] == where else f"{where} ({other['name']})"
+            n = other["count"]
+            if messagebox.askyesno(parent=self.dlg, title="Spare toners",
+                                   message=f"{what} has its own spare toner ({n} on the shelf). Join them into one? "
+                                           f"The counts are added ({n} + {mine} = {n + mine})."):
+                join.append(other["id"])
+                mine += n
+        if self.tid:
+            edit_toner(printers, self.tid, name, fits, join)
+        else:
+            add_toner(printers, name, fits, join)
         self.dlg.destroy()
-        self.screen.fill()
+        self.window.fill()
 
 
 class ReplacedDialog:
