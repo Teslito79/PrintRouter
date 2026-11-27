@@ -108,3 +108,6 @@ Paper tests for walk-in orders (branch walk-in-rebuild, 2026-11-17)
    uses on two copiers, press Edit… on one of them, tick the other copier for the same colour and
    Save: ORCA asks to join them, press Yes. Check both copiers' lines on the Data screen show the same
    "Spare: n (shared with …)", and that every count in Spare toners… matches what is on the shelf.
+24. Short edge: Add Email, a document item from a 2-page landscape PDF, Sides = Both sides, short
+   edge (flip on top). Place the order and print it. Flip the sheet on its top edge: the back must be the
+   right way up. Then cancel the test order.

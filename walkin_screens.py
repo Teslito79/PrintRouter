@@ -31,6 +31,21 @@ import walkin_queue
 FONT = costs.FONT
 COLOUR_CHOICES = {"B&W": "bw", "Colour": "color", "Some pages in colour": "mixed"}
 SIDE_CHOICES = {"One side": "single", "Both sides": "double"}
+# The Add-item form's Sides for documents (2026-11-27_02): item["sides"] stays "single" / "double" (prices and counts
+# unchanged); item["flip"] = "long" / "short" for both sides (old items without it: long).
+DOC_SIDES = {"One side": ("single", None), "Both sides, long edge": ("double", "long"),
+             "Both sides, short edge (flip on top)": ("double", "short")}
+
+
+def doc_sides(label):
+    """(sides, flip) of a Sides label; the old label "Both sides" counts as long edge."""
+    return DOC_SIDES.get(label) or {"Both sides": ("double", "long")}.get(label, ("single", None))
+
+
+def doc_sides_label(item):
+    if item.get("sides") != "double":
+        return "One side"
+    return "Both sides, short edge (flip on top)" if item.get("flip") == "short" else "Both sides, long edge"
 FINISH_CHOICES = {"None": "none", "Staple": "staple", "Spiral": "spiral"}
 
 
@@ -1432,7 +1447,8 @@ class QuoteScreen(Screen):
             v["color"] = combo("Colour", list(COLOUR_CHOICES), next(k for k, x in COLOUR_CHOICES.items() if x == d["color"]))
             self.colour_box = self.options.grid_slaves(row=row - 1, column=1)[0]
             v["color_pages"] = entry("Colour pages (e.g. 1, 3-5)", d["color_pages"], 16)
-            v["sides"] = combo("Sides", list(SIDE_CHOICES), next(k for k, x in SIDE_CHOICES.items() if x == d["sides"]))
+            v["sides"] = combo("Sides", list(DOC_SIDES), doc_sides_label(d))  # long / short edge (2026-11-27_02)
+            self.sides_box = self.options.grid_slaves(row=row - 1, column=1)[0]
             v["per_side"] = combo("Pages per side", [str(n) for n in cat.PER_SIDE], str(d["per_side"]))
             papers = pl.doc_papers()
             v["paper"] = combo("Paper", papers if d["paper"] in papers else papers + [d["paper"]], d["paper"])
@@ -1722,10 +1738,12 @@ class QuoteScreen(Screen):
                 return int(t)
             item = {"kind": "document", "size": v["size"].get(), "pages": 1 if self.multi() else whole("pages", "Pages"),
                     "copies": whole("copies", "Copies"), "color": COLOUR_CHOICES[v["color"].get()],
-                    "color_pages": v["color_pages"].get().strip(), "sides": SIDE_CHOICES[v["sides"].get()],
+                    "color_pages": v["color_pages"].get().strip(), "sides": doc_sides(v["sides"].get())[0],
                     "per_side": int(v["per_side"].get()), "paper": v["paper"].get(),
                     "finish": FINISH_CHOICES[v["finish"].get()], "lam": bool(v["lam"].get()),
                     "lam_sheets": whole("lam_sheets", "Sheets to laminate", 0), "cuts": whole("cuts", "Cuts", 0)}
+            if doc_sides(v["sides"].get())[1]:
+                item["flip"] = doc_sides(v["sides"].get())[1]
             if v.get("rotate") is not None and v["rotate"].get() and not self.rotate_reason(item):
                 item["rotate"] = True
             if item["color"] == "mixed" and not walkin_pricing.page_set(item["color_pages"], item["pages"]):

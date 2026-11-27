@@ -127,7 +127,8 @@ def settings_for(rules, item, prepared):
              "copies": str(item.get("sheets") or 1), "rotate": "0", "product": True, "gsm": routing.paper_gsm(paper)}
     else:
         s = {"color": {"bw": "bw", "color": "color", "mixed": "auto"}[item["color"]], "printer": "auto",
-             "sides": "long" if item["sides"] == "double" else "single", "paper": item["size"],
+             "sides": (("short" if item.get("flip") == "short" else "long") if item["sides"] == "double"
+                       else "single"), "paper": item["size"],  # flip: long / short edge (2026-11-27_02)
              "per_side": str(item.get("per_side", 1)), "paper_type": paper_type_for(rules, item["paper"]),
              "tray": TRAY, "copies": str(item["copies"]), "rotate": "1" if item.get("rotate") else "0"}
     s.update(item.get("print") or {})

@@ -70,7 +70,8 @@ def describe(item):
         colour = {"bw": "B&W", "color": "colour", "mixed": f"colour pages {item.get('color_pages') or '-'}"}[item["color"]]
         pages = ("type the pages" if item.get("pages_unknown") else f"{item['pages']} pages") + f" x {item['copies']}"
         parts = [f"Document {item['size']}"] + ([item["source_name"]] if item.get("source_name") else []) + [
-            pages, colour, "both sides" if item["sides"] == "double" else "one side"]
+            pages, colour, ("both sides, short edge" if item.get("flip") == "short" else "both sides")
+            if item["sides"] == "double" else "one side"]
         if item.get("per_side", 1) > 1:
             parts.append(f"{item['per_side']} per side")
         parts.append(item["paper"])
