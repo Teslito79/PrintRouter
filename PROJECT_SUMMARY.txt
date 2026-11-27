@@ -86,3 +86,5 @@ Paper that isn't plain always prints from the Bypass Tray; both sides on it at 2
 - The app prints only to the three Ricoh queues named in `rules.json`. Those don't exist at home, so the window opens but Print gives an error and the paper-type/tray checks are missing. Do paper tests at work.
 - Good home tasks: prices (`prices.json`), PyInstaller packaging, window and receipt changes.
 - When starting Claude Code at home, ask it to read this file first.
+
+- **Tests (2026-11-27_03):** `tests\` holds ORCA's tests, one file per area, with helpers and fixtures; `py -3.14 tests\run_all.py` runs them all (one line per file, a total, exit code 0 only when all green; it also checks ADMIN's local files are unchanged and no Python process is left). `--slow` adds the one-ORCA test. Safety rules: `tests\README.txt`.
