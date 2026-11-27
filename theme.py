@@ -124,6 +124,23 @@ def dark_title_bar(window):
         already_open.mark(window)
     except Exception:
         pass
+    _dark_frame(window)
+    # A transient dialog gets a new frame when Windows first shows it, losing the dark mode set above
+    # (2026-11-27_03: the Spare toners window had a light title bar): set it again then, once.
+    state = {"done": False}
+
+    def again(event):
+        if event.widget is window and not state["done"]:
+            state["done"] = True
+            _dark_frame(window)
+            window.after(60, lambda: _dark_frame(window))  # and once the new frame has settled
+    try:
+        window.bind("<Map>", again, add="+")
+    except Exception:
+        pass
+
+
+def _dark_frame(window):
     try:
         import ctypes
         window.update_idletasks()
