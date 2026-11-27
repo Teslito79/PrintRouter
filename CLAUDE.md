@@ -12,6 +12,7 @@ Christos (Tesla), runs a copy centre in Cyprus and the online shop PrintHub. Lea
 - Never ask him to paste passwords, keys or tokens into chat.
 - Tesla wants both (2026-11-19): wherever ORCA needs a file from the user, give it a drop box (`filedrop.py`) and a button that opens a file window; never only one of them.
 - Commit and push only as a handoff's "Commit and push" line says (see "Handoffs from the planning window"); otherwise commit nothing.
+- **Tests live in `tests\`** (2026-11-27_03): one file per area; every handoff adds its checks there. "Earlier tests still pass" means `py -3.14 tests\run_all.py` is all green (`--slow` adds the one-ORCA test). Safety rules in `tests\README.txt`. Scratch folders are only for throwaway work.
 
 ## Work PC chat
 
